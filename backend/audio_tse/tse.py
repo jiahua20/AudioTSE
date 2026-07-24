@@ -45,6 +45,10 @@ class BufferedWeSepTse:
         if not model.available:
             raise RuntimeError(model.unavailable_reason or "WeSep TSE 不可用")
 
+        from .wesep_loader import ensure_wesep_runtime
+
+        ensure_wesep_runtime()  # make `import wesep` work on a pristine install
+
         import torch
         from wesep import load_model_local
 

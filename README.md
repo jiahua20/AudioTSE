@@ -23,7 +23,7 @@ CPU 优先的实时目标说话人提取桌面原型。Electron/Vue 负责麦克
 
 运行前需要安装：
 
-- Node.js 20.19 或更高版本
+- Node.js 18.20 或更高版本
 - Miniconda 或 Anaconda
 - Windows PowerShell
 

@@ -35,6 +35,9 @@ __pycache__/
 # Downloaded model binaries
 models/
 
+# Large source clips fetched by scripts/make-test-audio-zh.py (regenerated on demand)
+samples/_raw/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
