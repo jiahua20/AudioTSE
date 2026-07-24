@@ -1,0 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+:root { font-family: 'Noto Sans SC', sans-serif; color: #1d2824; background: #e8e6df; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button { font: inherit; }

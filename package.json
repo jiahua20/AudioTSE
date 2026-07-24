@@ -1,0 +1,32 @@
+{
+  "name": "audiotse",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "desktop": "concurrently -k \"npm:dev\" \"npm:electron\"",
+    "electron": "wait-on tcp:5173 && electron electron/main.cjs",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.25.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "concurrently": "8.2.2",
+    "electron": "41.7.1",
+    "@eslint/js": "^9.13.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "eslint": "^9.13.0",
+    "eslint-plugin-vue": "^9.32.0",
+    "globals": "^15.11.0",
+    "typescript": "~5.6.2",
+    "typescript-eslint": "^8.11.0",
+    "vite": "^6.4.3",
+    "vue-eslint-parser": "^9.4.3",
+    "wait-on": "7.2.0"
+  }
+}
