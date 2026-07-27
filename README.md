@@ -2,6 +2,8 @@
 
 CPU 优先的实时目标说话人提取桌面原型。Electron/Vue 负责麦克风与字幕界面，Python WebSocket 服务负责编排模型和 Sherpa-ONNX 中文流式 ASR。
 
+> 想从头理解数据流与原理（TSE / 重叠相加 / 声纹门控降级等），读 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 ## 技术栈
 
 - 桌面端：Electron、Vue 3、TypeScript、Vite
@@ -67,8 +69,9 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 
 ```text
 backend/                 Python WebSocket、会话状态和 ASR
+docs/                    架构与原理文档（ARCHITECTURE.md / TSE-DEEP-DIVE.md）
 electron/                Electron 主进程与 preload
-scripts/                 模型下载脚本
+scripts/                 模型下载、TSE 安装与测试音频脚本
 src/                     Vue 桌面界面
 start.ps1                Windows 一键启动脚本
 ```

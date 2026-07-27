@@ -2,7 +2,7 @@
 """Build REAL Chinese test fixtures for the file-source UI.
 
 Uses genuinely different speakers (verified with the backend's 3D-Speaker
-ER2Net zh model; see scripts/_verify_zh_speakers.py):
+ER2Net zh model):
   * target = lei-jun-test.wav  (Lei Jun -- cosine <= 0.14 to every other clip)
   * other  = paraformer test_wavs/3.wav  (cosine 0.09 to lei-jun)
 

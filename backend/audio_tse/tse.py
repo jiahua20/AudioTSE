@@ -83,7 +83,7 @@ class BufferedWeSepTse:
         self._cf_samples = max(1, int(SAMPLE_RATE * CROSSFADE_SECONDS))
         self._hop_samples = self._window_samples - self._cf_samples
         # Linear-ramp analysis/synthesis window: ramp_up + ramp_down == 1 on the
-        # overlap, so overlap-add reconstructs unity (verified by _verify_ola.py).
+        # overlap, so overlap-add reconstructs unity.
         ramp = np.linspace(0.0, 1.0, self._cf_samples, endpoint=False, dtype=np.float32)
         win = np.ones(self._window_samples, dtype=np.float32)
         win[: self._cf_samples] = ramp
