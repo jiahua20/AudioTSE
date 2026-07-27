@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { CircleStop, FileMusic, FlaskConical, Mic, Radio, RotateCcw, ShieldAlert, Upload, UserRound } from '@lucide/vue'
+import { Activity, CircleStop, FileMusic, FlaskConical, Mic, Radio, RotateCcw, ShieldAlert, Upload, UserRound } from '@lucide/vue'
 import './App.css'
 
 type SessionState = 'idle' | 'enrolling' | 'ready' | 'extracting'
@@ -21,6 +21,14 @@ type ServerEvent = {
   selectedAsr?: string
   selectedProcessor?: string
   similarity?: number | null
+  processor?: string
+  wallSec?: number
+  audioSec?: number
+  tseMs?: number | null
+  asrMs?: number | null
+  backlogSec?: number
+  rtf?: number | null
+  e2eFirstMs?: number | null
 }
 
 const state = ref<SessionState>('idle')
@@ -38,6 +46,27 @@ const processors = ref<ModelOption[]>([])
 const selectedAsr = ref('')
 const selectedProcessor = ref('')
 const similarity = ref<number | null>(null)
+type Metrics = {
+  processor: string
+  wallSec: number
+  audioSec: number
+  tseMs: number | null
+  asrMs: number | null
+  backlogSec: number
+  rtf: number | null
+  e2eFirstMs: number | null
+}
+const metrics = ref<Metrics>({
+  processor: '', wallSec: 0, audioSec: 0,
+  tseMs: null, asrMs: null, backlogSec: 0, rtf: null, e2eFirstMs: null,
+})
+const rtfTone = computed<'ok' | 'warn' | 'bad' | 'na'>(() => {
+  const r = metrics.value.rtf
+  if (r == null) return 'na'
+  if (r < 0.85) return 'ok'
+  if (r < 1) return 'warn'
+  return 'bad'
+})
 const micLevel = ref(0)
 let socket: WebSocket | null = null
 let audio: { context: AudioContext; stream: MediaStream } | null = null
@@ -131,6 +160,18 @@ function connectBackend() {
       selectedProcessor.value = event.selectedProcessor || selectedProcessor.value
       notice.value = event.message || '处理失败'
       noticeTone.value = 'error'
+    }
+    if (event.event === 'metrics') {
+      metrics.value = {
+        processor: typeof event.processor === 'string' ? event.processor : metrics.value.processor,
+        wallSec: event.wallSec ?? 0,
+        audioSec: event.audioSec ?? 0,
+        tseMs: event.tseMs ?? null,
+        asrMs: event.asrMs ?? null,
+        backlogSec: event.backlogSec ?? 0,
+        rtf: event.rtf ?? null,
+        e2eFirstMs: event.e2eFirstMs ?? null,
+      }
     }
     if (event.event === 'transcript') {
       if (typeof event.similarity === 'number') similarity.value = event.similarity
@@ -507,6 +548,24 @@ function processorLabel(processor: string) {
             <button class="btn-listen" :class="{ stop: state === 'extracting' }" :disabled="state !== 'ready' && state !== 'extracting'" @click="toggleExtraction">
               <CircleStop v-if="state === 'extracting'" :size="16" /><Radio v-else :size="16" />{{ state === 'extracting' ? '停止' : '开始提取' }}
             </button>
+          </div>
+        </section>
+
+        <section v-if="metrics.rtf !== null" class="card metrics-panel">
+          <div class="metrics-head">
+            <div class="metrics-title"><Activity :size="15" /><b>实时性</b><small>RTF &lt; 1 表示处理快于真实速率</small></div>
+            <div class="rtf-badge" :class="rtfTone">
+              <span class="rtf-label">RTF</span>
+              <strong>{{ metrics.rtf != null ? metrics.rtf.toFixed(3) : '—' }}</strong>
+            </div>
+          </div>
+          <div class="metrics-grid">
+            <div class="metric"><span>端到端首字</span><b>{{ metrics.e2eFirstMs != null ? Math.round(metrics.e2eFirstMs) + ' ms' : '—' }}</b></div>
+            <div class="metric"><span>TSE 单窗耗时</span><b>{{ metrics.tseMs != null ? Math.round(metrics.tseMs) + ' ms' : '—' }}</b></div>
+            <div class="metric"><span>ASR 单次耗时</span><b>{{ metrics.asrMs != null ? Math.round(metrics.asrMs) + ' ms' : '—' }}</b></div>
+            <div class="metric"><span>缓冲积压</span><b :class="{ bad: metrics.backlogSec > 3.2 }">{{ metrics.backlogSec.toFixed(2) }} s</b></div>
+            <div class="metric"><span>已处理音频</span><b>{{ metrics.audioSec.toFixed(1) }} s</b></div>
+            <div class="metric"><span>运行墙钟</span><b>{{ metrics.wallSec.toFixed(1) }} s</b></div>
           </div>
         </section>
       </div>

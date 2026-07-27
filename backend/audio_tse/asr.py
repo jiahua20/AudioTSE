@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,6 +8,9 @@ import numpy as np
 
 
 SAMPLE_RATE = 16_000
+# paraformer/transducer streaming decode is largely autoregressive; benchmarking
+# showed more threads make it slower, so keep this small.
+_ASR_THREADS = 2
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,7 @@ class StreamingAsr:
                 tokens=str(model.model_dir / "tokens.txt"),
                 encoder=str(model.model_dir / "encoder.int8.onnx"),
                 decoder=str(model.model_dir / "decoder.int8.onnx"),
-                num_threads=2,
+                num_threads=_ASR_THREADS,
                 sample_rate=SAMPLE_RATE,
                 feature_dim=80,
                 decoding_method="greedy_search",
@@ -53,7 +57,7 @@ class StreamingAsr:
                 encoder=str(model.model_dir / "encoder-epoch-99-avg-1.int8.onnx"),
                 decoder=str(model.model_dir / "decoder-epoch-99-avg-1.onnx"),
                 joiner=str(model.model_dir / "joiner-epoch-99-avg-1.int8.onnx"),
-                num_threads=2,
+                num_threads=_ASR_THREADS,
                 sample_rate=SAMPLE_RATE,
                 feature_dim=80,
                 decoding_method="greedy_search",
@@ -62,6 +66,7 @@ class StreamingAsr:
             )
             self._tail_padding = 0.0
         self._stream = self.create_stream()
+        self.last_feed_ms = 0.0
 
     def create_stream(self):
         return self._recognizer.create_stream()
@@ -89,7 +94,9 @@ class StreamingAsr:
 
     def accept_pcm16(self, chunk: bytes) -> tuple[str, bool]:
         samples = np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0
+        start = time.perf_counter()
         text = self.feed(self._stream, samples)
+        self.last_feed_ms = (time.perf_counter() - start) * 1000.0
         final = self._recognizer.is_endpoint(self._stream)
         if final:
             self._recognizer.reset(self._stream)

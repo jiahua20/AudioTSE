@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 
 from websockets.asyncio.server import ServerConnection, serve
@@ -74,8 +75,41 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     return asr_models, processors
 
 
+FRAME_MS = (2048 / 16_000) * 1000.0   # one WebSocket chunk == 128 ms of audio
+WINDOW_MS = 3_000.0                    # TSE fixed window (see tse.WINDOW_SECONDS)
+
+
+def rtf_for(processor: str, tse_ms: float, asr_ms: float, gate_ms: float) -> float | None:
+    """Real-Time Factor = processing time / audio time. < 1 means it keeps up with live audio."""
+    if processor == "tse":
+        return (tse_ms + asr_ms) / WINDOW_MS if (tse_ms or asr_ms) else None
+    cost = gate_ms if processor == "speaker_gate" else asr_ms
+    return cost / FRAME_MS if cost else None
+
+
+def metrics_payload(rt: dict, tse, asr, processor: str) -> dict:
+    now = time.perf_counter()
+    tse_ms = tse.last_extract_ms if tse else 0.0
+    asr_ms = asr.last_feed_ms if asr else 0.0
+    e2e = None
+    if rt["first_text"] is not None:
+        e2e = (rt["first_text"] - rt["start"]) * 1000.0
+    rtf = rtf_for(processor, tse_ms, asr_ms, rt["gate_ms"])
+    return {
+        "processor": processor,
+        "wallSec": round(now - rt["start"], 2),
+        "audioSec": round(rt["audio"], 2),
+        "tseMs": round(tse_ms, 1) if tse and tse_ms else None,
+        "asrMs": round(asr_ms, 1) if asr and asr_ms else None,
+        "backlogSec": round(tse.buffered_seconds, 2) if tse else 0.0,
+        "rtf": round(rtf, 3) if rtf is not None else None,
+        "e2eFirstMs": round(e2e, 0) if e2e is not None else None,
+    }
+
+
 async def handle(websocket: ServerConnection) -> None:
     session = AudioSession()
+    rt = {"start": 0.0, "first_text": None, "audio": 0.0, "last_send": 0.0, "gate_ms": 0.0}
     selected_asr = "paraformer" if ASR_MODELS["paraformer"].available else "zipformer"
     selected_processor = (
         "tse"
@@ -107,16 +141,31 @@ async def handle(websocket: ServerConnection) -> None:
             try:
                 if isinstance(message, bytes):
                     session.accept_pcm16(message)
-                    if session.state == SessionState.EXTRACTING and tse and asr:
-                        for target_pcm16 in tse.accept_pcm16(message):
-                            text, final = asr.accept_pcm16(target_pcm16)
+                    if session.state == SessionState.EXTRACTING:
+                        rt["audio"] += len(message) / 32_000.0
+                        text_emitted = False
+                        if tse and asr:
+                            for target_pcm16 in await asyncio.to_thread(tse.accept_pcm16, message):
+                                text, final = await asyncio.to_thread(asr.accept_pcm16, target_pcm16)
+                                await send(websocket, "transcript", text=text, final=final)
+                                text_emitted = text_emitted or bool(text)
+                        elif gate:
+                            g_start = time.perf_counter()
+                            for tr in await asyncio.to_thread(gate.accept_pcm16, message):
+                                await send(websocket, "transcript", **tr)
+                                text_emitted = text_emitted or bool(tr.get("text"))
+                            rt["gate_ms"] = (time.perf_counter() - g_start) * 1000.0
+                        elif asr:
+                            text, final = await asyncio.to_thread(asr.accept_pcm16, message)
                             await send(websocket, "transcript", text=text, final=final)
-                    elif session.state == SessionState.EXTRACTING and gate:
-                        for transcript in gate.accept_pcm16(message):
-                            await send(websocket, "transcript", **transcript)
-                    elif session.state == SessionState.EXTRACTING and asr:
-                        text, final = asr.accept_pcm16(message)
-                        await send(websocket, "transcript", text=text, final=final)
+                            text_emitted = text_emitted or bool(text)
+                        if text_emitted and rt["first_text"] is None:
+                            rt["first_text"] = time.perf_counter()
+                        now = time.perf_counter()
+                        if now - rt["last_send"] >= 0.4:
+                            rt["last_send"] = now
+                            await send(websocket, "metrics",
+                                       **metrics_payload(rt, tse, asr, selected_processor))
                     continue
                 payload = json.loads(message)
                 command = payload.get("command")
@@ -162,6 +211,8 @@ async def handle(websocket: ServerConnection) -> None:
                         except Exception as error:
                             raise SessionError(f"WeSep TSE 加载失败：{error}") from error
                     session.start_extraction()
+                    rt.update(start=time.perf_counter(), first_text=None,
+                              audio=0.0, last_send=0.0, gate_ms=0.0)
                 elif command == "stopExtraction":
                     session.stop_extraction()
                     asr = None

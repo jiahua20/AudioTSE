@@ -298,6 +298,27 @@ button:disabled { cursor: not-allowed; opacity: .45; transform: none !important;
 .file-tip { margin: 4px 0 0; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
 .file-tip code { font-family: var(--font-mono); background: var(--card-soft); padding: 1px 5px; border-radius: 4px; color: var(--text); }
 
+/* metrics / realtime panel */
+.metrics-panel { padding: 16px 22px; margin-bottom: 22px; }
+.metrics-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.metrics-title { display: flex; align-items: center; gap: 8px; color: var(--brand); }
+.metrics-title b { font-size: 13px; color: var(--text); font-weight: 600; }
+.metrics-title small { font-size: 11px; color: var(--muted); }
+.rtf-badge { display: inline-flex; align-items: baseline; gap: 8px; padding: 7px 14px; border-radius: var(--r-sm); background: var(--card-soft); border: 1px solid var(--line); }
+.rtf-badge .rtf-label { font: 700 10px var(--font-mono); letter-spacing: 1px; color: var(--faint); }
+.rtf-badge strong { font: 700 18px var(--font-mono); color: var(--faint); }
+.rtf-badge.ok { background: var(--ok-soft); border-color: #a7f3d0; }
+.rtf-badge.ok strong { color: var(--ok); }
+.rtf-badge.warn { background: var(--warn-soft); border-color: var(--warn-line); }
+.rtf-badge.warn strong { color: var(--warn); }
+.rtf-badge.bad { background: var(--error-soft); border-color: #fecaca; }
+.rtf-badge.bad strong { color: var(--error); }
+.metrics-grid { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.metric { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--card-soft); border-radius: var(--r-sm); border: 1px solid var(--line); }
+.metric span { font-size: 11px; color: var(--muted); }
+.metric b { font: 600 14px var(--font-mono); color: var(--text); }
+.metric b.bad { color: var(--error); }
+
 @media (max-width: 820px) {
   .workspace { grid-template-columns: 1fr; }
   aside { display: none; }
@@ -305,4 +326,5 @@ button:disabled { cursor: not-allowed; opacity: .45; transform: none !important;
   .model-row { grid-template-columns: 1fr; gap: 10px; }
   .enrollment-panel { flex-wrap: wrap; }
   .btn-primary { width: 100%; }
+  .metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
