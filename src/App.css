@@ -270,8 +270,12 @@ button:disabled { cursor: not-allowed; opacity: .45; transform: none !important;
 @keyframes wave-idle { 0%, 100% { transform: scaleY(.55); } 50% { transform: scaleY(1); } }
 
 .transcript-footer { border-top: 1px solid var(--line); background: var(--card); }
+.footer-actions { display: inline-flex; align-items: center; gap: 8px; }
 .meta { font: 11px var(--font-mono); color: var(--muted); }
 .meta b { color: var(--brand); }
+.play-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--card-soft); border: 1px solid var(--line); border-radius: var(--r-sm); transition: all .18s ease; }
+.play-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--brand); }
+.play-toggle.on { color: var(--brand); border-color: var(--brand); background: rgba(13, 148, 136, .08); }
 .btn-listen { padding: 9px 16px; font-size: 12px; }
 .btn-listen:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 18px -4px rgba(13, 148, 136, .55); }
 

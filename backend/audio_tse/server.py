@@ -9,7 +9,7 @@ from websockets.exceptions import ConnectionClosed
 from .asr import AsrModel, StreamingAsr
 from .session import AudioSession, SessionError, SessionState
 from .speaker_gate import SpeakerGate
-from .tse import BufferedWeSepTse, TseModel
+from .tse import CROSSFADE_SECONDS, WINDOW_SECONDS, BufferedWeSepTse, TseModel
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,13 +76,13 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
 
 
 FRAME_MS = (2048 / 16_000) * 1000.0   # one WebSocket chunk == 128 ms of audio
-WINDOW_MS = 3_000.0                    # TSE fixed window (see tse.WINDOW_SECONDS)
+HOP_MS = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0  # one TSE hop == window minus crossfade
 
 
 def rtf_for(processor: str, tse_ms: float, asr_ms: float, gate_ms: float) -> float | None:
     """Real-Time Factor = processing time / audio time. < 1 means it keeps up with live audio."""
     if processor == "tse":
-        return (tse_ms + asr_ms) / WINDOW_MS if (tse_ms or asr_ms) else None
+        return (tse_ms + asr_ms) / HOP_MS if (tse_ms or asr_ms) else None
     cost = gate_ms if processor == "speaker_gate" else asr_ms
     return cost / FRAME_MS if cost else None
 
@@ -146,6 +146,7 @@ async def handle(websocket: ServerConnection) -> None:
                         text_emitted = False
                         if tse and asr:
                             for target_pcm16 in await asyncio.to_thread(tse.accept_pcm16, message):
+                                await websocket.send(target_pcm16)
                                 text, final = await asyncio.to_thread(asr.accept_pcm16, target_pcm16)
                                 await send(websocket, "transcript", text=text, final=final)
                                 text_emitted = text_emitted or bool(text)
@@ -215,6 +216,16 @@ async def handle(websocket: ServerConnection) -> None:
                               audio=0.0, last_send=0.0, gate_ms=0.0)
                 elif command == "stopExtraction":
                     session.stop_extraction()
+                    if tse and asr:
+                        # drain the partial TSE tail window (< 3s) so trailing
+                        # audio isn't dropped, then flush ASR trailing context
+                        for target_pcm16 in await asyncio.to_thread(tse.flush):
+                            await websocket.send(target_pcm16)
+                            text, final = await asyncio.to_thread(asr.accept_pcm16, target_pcm16)
+                            await send(websocket, "transcript", text=text, final=final)
+                        tail = await asyncio.to_thread(asr.finish, asr._stream)
+                        if tail:
+                            await send(websocket, "transcript", text=tail, final=True)
                     asr = None
                     gate = None
                     tse = None

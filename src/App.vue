@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Activity, CircleStop, FileMusic, FlaskConical, Mic, Radio, RotateCcw, ShieldAlert, Upload, UserRound } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Activity, CircleStop, FileMusic, FlaskConical, Mic, Radio, RotateCcw, ShieldAlert, Upload, UserRound, Volume2, VolumeX } from '@lucide/vue'
 import './App.css'
 
 type SessionState = 'idle' | 'enrolling' | 'ready' | 'extracting'
@@ -40,7 +40,13 @@ const notice = ref('正在连接本地音频服务…')
 const noticeTone = ref<BannerTone>('info')
 const transcript = ref<TranscriptEntry[]>([])
 const partialText = ref('')
+const partialTarget = ref('')
 const liveTime = ref('')
+const playback = ref(false)  // play separated audio; mic mode defaults off (howl), file mode auto-on
+const typePending: string[] = []
+let typeTimer: ReturnType<typeof setInterval> | null = null
+let playCtx: AudioContext | null = null
+let nextStartTime = 0
 const asrModels = ref<ModelOption[]>([])
 const processors = ref<ModelOption[]>([])
 const selectedAsr = ref('')
@@ -130,7 +136,11 @@ function connectBackend() {
     noticeTone.value = 'warn'
     if (mounted) reconnectTimer = setTimeout(connectBackend, 2000)
   }
-  socket.onmessage = ({ data }) => {
+  socket.onmessage = async ({ data }) => {
+    if (data instanceof Blob) {
+      if (playback.value) enqueueSeparatedAudio(await data.arrayBuffer())
+      return
+    }
     const event = JSON.parse(data) as ServerEvent
     if (event.state) state.value = event.state
     if (event.event === 'hello') {
@@ -176,13 +186,16 @@ function connectBackend() {
     if (event.event === 'transcript') {
       if (typeof event.similarity === 'number') similarity.value = event.similarity
       if (event.final) {
+        if (typeTimer) { clearInterval(typeTimer); typeTimer = null }
+        typePending.length = 0
         const text = (event.text || '').trim()
         if (text) transcript.value.push({ time: liveTime.value || nowstamp(), text: withPunct(text) })
         partialText.value = ''
+        partialTarget.value = ''
         liveTime.value = ''
       } else {
         if (!liveTime.value) liveTime.value = nowstamp()
-        partialText.value = event.text || ''
+        feedPartial(event.text || '')
       }
     }
   }
@@ -196,7 +209,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   mounted = false
   if (reconnectTimer) clearTimeout(reconnectTimer)
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null }
   stopFileStream()
+  stopPlayback()
   socket?.close()
   void stopCapture()
 })
@@ -251,6 +266,82 @@ async function decodeAudioFile(file: File): Promise<Float32Array> {
   } finally {
     await context.close()
   }
+}
+
+// --- separated-audio playback + typewriter (so sound and text stream together) ---
+watch(sourceMode, (m) => {
+  if (m === 'file') { playback.value = true; ensurePlayCtx() }
+  else { playback.value = false; stopPlayback() }
+})
+
+function ensurePlayCtx(): AudioContext {
+  if (!playCtx) {
+    playCtx = new AudioContext({ sampleRate: 16000 })
+    nextStartTime = playCtx.currentTime
+  }
+  if (playCtx.state === 'suspended') void playCtx.resume()
+  return playCtx
+}
+
+function enqueueSeparatedAudio(pcm16: ArrayBuffer) {
+  const ctx = ensurePlayCtx()
+  const i16 = new Int16Array(pcm16)
+  const f32 = new Float32Array(i16.length)
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768
+  const buf = ctx.createBuffer(1, f32.length, 16000)
+  buf.copyToChannel(f32, 0)
+  const src = ctx.createBufferSource()
+  src.buffer = buf
+  src.connect(ctx.destination)
+  const now = ctx.currentTime
+  if (nextStartTime < now) nextStartTime = now  // fell behind: resync to avoid a growing pile-up
+  src.start(nextStartTime)
+  nextStartTime += buf.duration
+}
+
+function stopPlayback() {
+  if (playCtx) {
+    void playCtx.close().catch(() => {})
+    playCtx = null
+    nextStartTime = 0
+  }
+}
+
+function togglePlayback() {
+  playback.value = !playback.value
+  if (!playback.value) { stopPlayback(); return }
+  if (sourceMode.value === 'mic') {
+    notice.value = '正在播放分离音频：请戴耳机，否则扬声器声音会被麦克风收回造成啸叫'
+    noticeTone.value = 'warn'
+  }
+  ensurePlayCtx()
+}
+
+function feedPartial(text: string) {
+  if (text.startsWith(partialText.value)) {
+    for (const ch of text.slice(partialText.value.length)) typePending.push(ch)
+    partialTarget.value = text
+    ensureTypeTimer()
+  } else {
+    // ASR revised earlier text: snap to it instead of continuing the typewriter
+    if (typeTimer) { clearInterval(typeTimer); typeTimer = null }
+    typePending.length = 0
+    partialText.value = text
+    partialTarget.value = text
+  }
+}
+
+function ensureTypeTimer() {
+  if (typeTimer) return
+  typeTimer = setInterval(() => {
+    if (typePending.length === 0) {
+      clearInterval(typeTimer!)
+      typeTimer = null
+      partialText.value = partialTarget.value
+      return
+    }
+    partialText.value += typePending.shift()
+  }, 90)
 }
 
 function stopFileStream() {
@@ -376,8 +467,11 @@ async function toggleExtraction() {
 }
 
 function clearTranscript() {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null }
+  typePending.length = 0
   transcript.value = []
   partialText.value = ''
+  partialTarget.value = ''
   liveTime.value = ''
 }
 
@@ -545,9 +639,14 @@ function processorLabel(processor: string) {
           </div>
           <div class="transcript-footer">
             <span class="meta">16 kHz · 单声道 · PCM16<span v-if="similarity !== null"> · 相似度 <b>{{ similarity.toFixed(2) }}</b></span></span>
-            <button class="btn-listen" :class="{ stop: state === 'extracting' }" :disabled="state !== 'ready' && state !== 'extracting'" @click="toggleExtraction">
-              <CircleStop v-if="state === 'extracting'" :size="16" /><Radio v-else :size="16" />{{ state === 'extracting' ? '停止' : '开始提取' }}
-            </button>
+            <div class="footer-actions">
+              <button class="play-toggle" :class="{ on: playback }" :disabled="!tseReady" @click="togglePlayback" :title="playback ? '关闭分离音频播放' : '播放分离出的目标人声音'">
+                <Volume2 v-if="playback" :size="14" /><VolumeX v-else :size="14" />{{ playback ? '播放分离' : '已静音' }}
+              </button>
+              <button class="btn-listen" :class="{ stop: state === 'extracting' }" :disabled="state !== 'ready' && state !== 'extracting'" @click="toggleExtraction">
+                <CircleStop v-if="state === 'extracting'" :size="16" /><Radio v-else :size="16" />{{ state === 'extracting' ? '停止' : '开始提取' }}
+              </button>
+            </div>
           </div>
         </section>
 
