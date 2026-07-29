@@ -8,8 +8,8 @@ import numpy as np
 
 
 SAMPLE_RATE = 16_000
-# paraformer/transducer streaming decode is largely autoregressive; benchmarking
-# showed more threads make it slower, so keep this small.
+# paraformer/transducer 的流式解码在很大程度上是自回归的；基准测试表明
+# 线程数越多反而越慢，因此保持较小的取值。
 _ASR_THREADS = 2
 
 

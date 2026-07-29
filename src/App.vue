@@ -15,6 +15,8 @@ type ServerEvent = {
   message?: string
   asrReady?: boolean
   tseReady?: boolean
+  ready?: boolean
+  reason?: string
   bypassEnabled?: boolean
   asrModels?: ModelOption[]
   processors?: ModelOption[]
@@ -29,12 +31,15 @@ type ServerEvent = {
   backlogSec?: number
   rtf?: number | null
   e2eFirstMs?: number | null
+  droppedSec?: number
+  silentWindows?: number
 }
 
 const state = ref<SessionState>('idle')
 const connected = ref(false)
 const asrReady = ref(false)
 const tseReady = ref(false)
+const tseEngineReady = ref(false)  // 分离引擎(262MB 权重)是否已在后台加载+预热完成
 const bypass = ref(false)
 const notice = ref('正在连接本地音频服务…')
 const noticeTone = ref<BannerTone>('info')
@@ -42,7 +47,7 @@ const transcript = ref<TranscriptEntry[]>([])
 const partialText = ref('')
 const partialTarget = ref('')
 const liveTime = ref('')
-const playback = ref(false)  // play separated audio; mic mode defaults off (howl), file mode auto-on
+const playback = ref(false)  // 播放分离后的音频；麦克风模式默认关闭（防止啸叫），文件模式自动开启
 const typePending: string[] = []
 let typeTimer: ReturnType<typeof setInterval> | null = null
 let playCtx: AudioContext | null = null
@@ -59,12 +64,14 @@ type Metrics = {
   tseMs: number | null
   asrMs: number | null
   backlogSec: number
+  droppedSec: number
+  silentWindows: number
   rtf: number | null
   e2eFirstMs: number | null
 }
 const metrics = ref<Metrics>({
   processor: '', wallSec: 0, audioSec: 0,
-  tseMs: null, asrMs: null, backlogSec: 0, rtf: null, e2eFirstMs: null,
+  tseMs: null, asrMs: null, backlogSec: 0, droppedSec: 0, silentWindows: 0, rtf: null, e2eFirstMs: null,
 })
 const rtfTone = computed<'ok' | 'warn' | 'bad' | 'na'>(() => {
   const r = metrics.value.rtf
@@ -79,7 +86,7 @@ let audio: { context: AudioContext; stream: MediaStream } | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let mounted = false
 
-// --- file-source mode (test the pipeline without a microphone) ---
+// --- 文件音源模式（无需麦克风即可测试整条流水线） ---
 type SourceMode = 'mic' | 'file'
 const sourceMode = ref<SourceMode>('mic')
 const enrollBuffer = ref<Float32Array | null>(null)
@@ -94,6 +101,15 @@ let fileTimer: ReturnType<typeof setInterval> | null = null
 let fileKind: 'enroll' | 'mix' | null = null
 
 const busy = computed(() => state.value === 'enrolling' || state.value === 'extracting')
+// TSE 引擎在后台加载时禁用「开始注册」：把权重加载那约 5 秒挡在注册之前，
+// 这样点「开始提取」时引擎已热，不再卡在加载上。
+const tseLoading = computed(() => selectedProcessor.value === 'tse' && !tseEngineReady.value)
+const enrollDisabled = computed(() => !connected.value || state.value === 'extracting' || tseLoading.value)
+const enrollLabel = computed(() => {
+  if (state.value === 'enrolling') return '完成注册'
+  if (tseLoading.value) return '加载模型中…'
+  return '开始注册'
+})
 const bannerTitle = computed(() => ({
   info: '系统状态',
   ok: '已就绪',
@@ -132,6 +148,7 @@ function connectBackend() {
   socket.onclose = () => {
     connected.value = false
     asrReady.value = false
+    tseEngineReady.value = false
     notice.value = '本地音频服务未启动，正在重试连接…'
     noticeTone.value = 'warn'
     if (mounted) reconnectTimer = setTimeout(connectBackend, 2000)
@@ -146,6 +163,7 @@ function connectBackend() {
     if (event.event === 'hello') {
       asrReady.value = Boolean(event.asrReady)
       tseReady.value = Boolean(event.tseReady)
+      tseEngineReady.value = false  // 新连接：引擎尚未加载，等 tseEngineReady 事件
       bypass.value = Boolean(event.bypassEnabled)
       asrModels.value = event.asrModels || []
       processors.value = event.processors || []
@@ -154,12 +172,23 @@ function connectBackend() {
       notice.value = event.message || ''
       noticeTone.value = event.tseReady ? 'ok' : toneForProcessor(selectedProcessor.value)
     }
+    if (event.event === 'tseEngineReady') {
+      tseEngineReady.value = Boolean(event.ready)
+      if (event.ready) {
+        notice.value = '分离模型已加载完成，可以开始注册了'
+        noticeTone.value = 'ok'
+      } else if (event.reason) {
+        notice.value = `分离模型加载失败：${event.reason}`
+        noticeTone.value = 'error'
+      }
+    }
     if (event.event === 'modelsChanged') {
       bypass.value = Boolean(event.bypassEnabled)
       selectedAsr.value = event.selectedAsr || selectedAsr.value
       selectedProcessor.value = event.selectedProcessor || selectedProcessor.value
+      tseEngineReady.value = false  // 切换链路后重置；切到 TSE 时后端会重新预加载并通知
       notice.value = selectedProcessor.value === 'tse'
-        ? '纯音频 TSE 已启用：WeSep BSRNN 约 3 秒缓冲，中文效果待实测'
+        ? '纯音频 TSE 已启用：WeSep BSRNN 约 1.7 秒缓冲，正在后台加载分离模型…'
         : selectedProcessor.value === 'speaker_gate'
           ? '声纹门控降级已启用：适合轮流说话，不支持重叠语音分离'
           : '原音诊断已启用：所有说话人都会进入识别'
@@ -179,6 +208,8 @@ function connectBackend() {
         tseMs: event.tseMs ?? null,
         asrMs: event.asrMs ?? null,
         backlogSec: event.backlogSec ?? 0,
+        droppedSec: event.droppedSec ?? 0,
+        silentWindows: event.silentWindows ?? 0,
         rtf: event.rtf ?? null,
         e2eFirstMs: event.e2eFirstMs ?? null,
       }
@@ -268,7 +299,7 @@ async function decodeAudioFile(file: File): Promise<Float32Array> {
   }
 }
 
-// --- separated-audio playback + typewriter (so sound and text stream together) ---
+// --- 分离音频播放 + 打字机效果（让声音和文字同步流出） ---
 watch(sourceMode, (m) => {
   if (m === 'file') { playback.value = true; ensurePlayCtx() }
   else { playback.value = false; stopPlayback() }
@@ -294,7 +325,7 @@ function enqueueSeparatedAudio(pcm16: ArrayBuffer) {
   src.buffer = buf
   src.connect(ctx.destination)
   const now = ctx.currentTime
-  if (nextStartTime < now) nextStartTime = now  // fell behind: resync to avoid a growing pile-up
+  if (nextStartTime < now) nextStartTime = now  // 已落后：重新对齐到当前时间，避免积压越堆越多
   src.start(nextStartTime)
   nextStartTime += buf.duration
 }
@@ -323,7 +354,7 @@ function feedPartial(text: string) {
     partialTarget.value = text
     ensureTypeTimer()
   } else {
-    // ASR revised earlier text: snap to it instead of continuing the typewriter
+    // ASR 修订了之前的文本：直接跳到最新结果，不再继续打字机动画
     if (typeTimer) { clearInterval(typeTimer); typeTimer = null }
     typePending.length = 0
     partialText.value = text
@@ -353,8 +384,8 @@ function stopFileStream() {
   micLevel.value = 0
 }
 
-// Feed the file into the same WS path the mic uses, at real-time pace, so the
-// streaming TSE/ASR behaves as if it were a live capture.
+// 把文件按真实速度灌入麦克风所用的同一条 WebSocket 路径，
+// 让流式 TSE/ASR 像处理实时采集一样工作。
 function startFileStream(buffer: Float32Array, kind: 'enroll' | 'mix', onDone: () => void) {
   stopFileStream()
   fileKind = kind
@@ -458,11 +489,14 @@ async function toggleExtraction() {
   }
   sendCommand('startExtraction')
   similarity.value = null
-  if (sourceMode.value === 'file') {
-    await waitForState('extracting')
-    startFileStream(mixBuffer.value!, 'mix', () => sendCommand('stopExtraction'))
-  } else {
-    await startCapture()
+  // 等后端确认进入 extracting 再开始发音频(TSE 构造注册嵌入要数秒);
+  // 失败/超时则不启动采集——后端若失败会另发 error 事件提示原因
+  if (await waitForState('extracting', 10000)) {
+    if (sourceMode.value === 'file') {
+      startFileStream(mixBuffer.value!, 'mix', () => sendCommand('stopExtraction'))
+    } else {
+      await startCapture()
+    }
   }
 }
 
@@ -515,7 +549,7 @@ function processorLabel(processor: string) {
         <div class="section-label engine-head">引擎状态</div>
         <div class="engine-status">
           <div class="engine-row"><span>中文流式 ASR</span><b :class="{ ok: asrReady }">{{ asrReady ? '就绪' : '缺少模型' }}</b></div>
-          <div class="engine-row"><span>纯音频 TSE</span><b :class="{ ok: tseReady }">{{ tseReady ? '实验就绪' : '待安装' }}</b></div>
+          <div class="engine-row"><span>纯音频 TSE</span><b :class="{ ok: tseReady && !tseLoading }" :title="tseLoading ? '正在后台加载 262MB 分离模型' : ''">{{ tseLoading ? '加载中…' : tseReady ? '实验就绪' : '待安装' }}</b></div>
           <div class="engine-row"><span>当前链路</span><b :class="{ ok: selectedProcessor === 'tse' }">{{ processorLabel(selectedProcessor) }}</b></div>
           <div class="engine-row"><span>运行设备</span><b>CPU</b></div>
         </div>
@@ -606,8 +640,8 @@ function processorLabel(processor: string) {
               <i v-for="bar in 24" :key="bar" :style="meterStyle(bar)" />
             </div>
           </div>
-          <button class="btn-primary" :class="{ stop: state === 'enrolling' }" :disabled="!connected || state === 'extracting'" @click="toggleEnrollment">
-            <CircleStop v-if="state === 'enrolling'" :size="18" /><Mic v-else :size="18" />{{ state === 'enrolling' ? '完成注册' : '开始注册' }}
+          <button class="btn-primary" :class="{ stop: state === 'enrolling' }" :disabled="enrollDisabled" @click="toggleEnrollment">
+            <CircleStop v-if="state === 'enrolling'" :size="18" /><Mic v-else :size="18" />{{ enrollLabel }}
           </button>
         </section>
 
@@ -640,8 +674,8 @@ function processorLabel(processor: string) {
           <div class="transcript-footer">
             <span class="meta">16 kHz · 单声道 · PCM16<span v-if="similarity !== null"> · 相似度 <b>{{ similarity.toFixed(2) }}</b></span></span>
             <div class="footer-actions">
-              <button class="play-toggle" :class="{ on: playback }" :disabled="!tseReady" @click="togglePlayback" :title="playback ? '关闭分离音频播放' : '播放分离出的目标人声音'">
-                <Volume2 v-if="playback" :size="14" /><VolumeX v-else :size="14" />{{ playback ? '播放分离' : '已静音' }}
+              <button class="play-toggle" :class="{ on: playback }" :disabled="!connected" @click="togglePlayback" :title="playback ? '关闭后端音频回放' : '回放后端正在处理的音频，听实时性（TSE=分离音 / 门控=放行的目标段 / 直通=原音）；麦克风模式请戴耳机防啸叫'">
+                <Volume2 v-if="playback" :size="14" /><VolumeX v-else :size="14" />{{ playback ? '回放音频' : '已静音' }}
               </button>
               <button class="btn-listen" :class="{ stop: state === 'extracting' }" :disabled="state !== 'ready' && state !== 'extracting'" @click="toggleExtraction">
                 <CircleStop v-if="state === 'extracting'" :size="16" /><Radio v-else :size="16" />{{ state === 'extracting' ? '停止' : '开始提取' }}
@@ -663,6 +697,8 @@ function processorLabel(processor: string) {
             <div class="metric"><span>TSE 单窗耗时</span><b>{{ metrics.tseMs != null ? Math.round(metrics.tseMs) + ' ms' : '—' }}</b></div>
             <div class="metric"><span>ASR 单次耗时</span><b>{{ metrics.asrMs != null ? Math.round(metrics.asrMs) + ' ms' : '—' }}</b></div>
             <div class="metric"><span>缓冲积压</span><b :class="{ bad: metrics.backlogSec > 3.2 }">{{ metrics.backlogSec.toFixed(2) }} s</b></div>
+            <div class="metric"><span>跳过保实时</span><b :class="{ bad: metrics.droppedSec > 0 }" :title="metrics.droppedSec > 0 ? 'CPU 跟不上实时时丢弃的中间音频，这段不会被转写' : ''">{{ metrics.droppedSec.toFixed(2) }} s</b></div>
+            <div class="metric"><span>静音跳过</span><b :title="'未检测到人声、原声直通、跳过 TSE 的窗口数'">{{ metrics.silentWindows }}</b></div>
             <div class="metric"><span>已处理音频</span><b>{{ metrics.audioSec.toFixed(1) }} s</b></div>
             <div class="metric"><span>运行墙钟</span><b>{{ metrics.wallSec.toFixed(1) }} s</b></div>
           </div>

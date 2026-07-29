@@ -23,7 +23,7 @@
 | 4 | 工程垫片 | `wesep_loader.py`、`_wesep_utils/` | 让「缺胳膊少腿」的 wesep wheel 不改 site-packages 也能跑 |
 | 5 | 前端主体 | `src/App.vue` | WS 客户端、采集、文件灌入、回放、打字机字幕 |
 
-第 6 章给出全工程闭环的全景图；附录 A 单独拆解「为什么开始提取后会有 ~3 秒延迟」。
+第 6 章给出全工程闭环的全景图；附录 A 单独拆解「为什么开始提取后会有 ~1.7 秒延迟」。
 
 ---
 
@@ -217,7 +217,7 @@ def stop_extraction(self) -> None:        # session.py:58
 
 258 行，按「模块级辅助 → 指标 → 主循环」三段拆。
 
-#### ① 模块级：模型注册表（`server.py:15-41`）
+#### ① 模块级：模型注册表（`server.py:21-47`）
 
 ```python
 ROOT = Path(__file__).resolve().parents[2]     # 工程根目录
@@ -233,7 +233,7 @@ TSE_MODEL = TseModel("wesep_bsrnn", "WeSep BSRNN ...", MODELS_DIR / "wesep-bsrnn
 
 这是「能力清单」：两个 ASR 模型 + 三个处理器要用的权重。注意它们都只是**路径 + 元信息**——`available` 属性会去磁盘查文件在不在（`tse.py` 里还查 torch/wesep 是否装了）。连上服务时，缺哪些权重前端立刻知道。
 
-#### ② `send` / `model_options`：协议辅助（`server.py:44-75`）
+#### ② `send` / `model_options`：协议辅助（`server.py:50-81`）
 
 ```python
 async def send(websocket, event, **payload):
@@ -244,34 +244,36 @@ async def send(websocket, event, **payload):
 
 `model_options()` 把能力清单打包成两个数组（`asrModels` + `processors`）回给前端，每个处理器带 `description` / `available` / `reason`——前端据此渲染「哪些按钮能点、灰掉的写明原因」。这就是为什么没装 WeSep 时界面会显示「运行 install-wesep-tse.ps1」。
 
-#### ③ 指标三件套（`server.py:78-107`）—— UI 上那些数字怎么来
+#### ③ 指标三件套（`server.py:84-113`）—— UI 上那些数字怎么来
 
 ```python
 FRAME_MS = (2048 / 16_000) * 1000.0          # 一个 WS 帧 = 128 ms 音频
-HOP_MS   = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0   # 一个 TSE hop = 1900 ms
+HOP_MS   = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0   # 一个 TSE hop = 900 ms
 ```
 
 两个时间基准：
 
 - `FRAME_MS = 128`：麦克风/文件每帧 2048 采样 = 128ms（第 5 章讲采集时会再碰到）。
-- `HOP_MS = 1900`：TSE 每出一个窗前进 1.9 秒（= 2 秒窗 − 0.1 秒重叠，第 3 章讲 OLA 时细讲）。
+- `HOP_MS = 900`：TSE 每出一个窗前进 0.9 秒（= 1 秒窗 − 0.1 秒重叠，第 3 章讲 OLA 时细讲）。
 
 ```python
-def rtf_for(processor, tse_ms, asr_ms, gate_ms):    # server.py:82
+def rtf_for(processor, tse_ms, asr_ms, gate_ms):    # server.py:88
     if processor == "tse":
-        return (tse_ms + asr_ms) / HOP_MS           # 处理耗时 / 1.9s 音频
+        return (tse_ms + asr_ms) / HOP_MS           # 处理耗时 / 0.9s 音频
     cost = gate_ms if processor == "speaker_gate" else asr_ms
     return cost / FRAME_MS                          # 处理耗时 / 128ms 音频
 ```
 
-**RTF（实时因子）= 处理耗时 ÷ 音频时长。< 1 表示跟得上实时。** 分母不同：TSE 按「窗」节奏（1.9s），门控/直通按「帧」节奏（128ms）。
+**RTF（实时因子）= 处理耗时 ÷ 音频时长。< 1 表示跟得上实时。** 分母不同：TSE 按「窗」节奏（0.9s），门控/直通按「帧」节奏（128ms）。
 
-`metrics_payload` 把 RTF、墙钟、已处理音频时长、单窗耗时、**缓冲积压 backlogSec**、**首字延时 e2eFirstMs** 打包，每 0.4 秒推一次。两个对调试最有用：
+`metrics_payload` 把 RTF、墙钟、已处理音频时长、单窗耗时、**缓冲积压 backlogSec**、**积压丢弃 droppedSec**、**静音跳过 silentWindows**、**首字延时 e2eFirstMs** 打包，每 0.4 秒推一次。几个对调试最有用的：
 
-- `backlogSec = tse.buffered_seconds`：还没攒满窗的音频量，> 3.2s 前端标红（CPU 跟不上了，窗口越积越多）。
+- `backlogSec = tse.buffered_seconds`：还没攒满窗的音频量（输入缓冲 + OLA 重叠区）。
+- `droppedSec`：积压追赶丢弃的秒数（> 0 说明 CPU 落后于实时、丢了最旧的音频保延迟有界，见第 3 章）。
+- `silentWindows`：被 VAD 判为静音、跳过 BSRNN 直接原声直通的窗数（静音段几乎不耗 CPU）。
 - `e2eFirstMs`：从 `startExtraction` 到第一个字出现的墙钟差——附录 A 讲的「延迟」，后端就是这么量的。
 
-#### ④ `handle` 开头：每个连接一套全新会话（`server.py:110-138`）
+#### ④ `handle` 开头：每个连接一套全新会话（`server.py:116-147`）
 
 ```python
 async def handle(websocket):
@@ -288,14 +290,15 @@ async def handle(websocket):
 - **`session` 是函数局部变量**——每条连接独立，断线重连就是新会话（注册语音也丢了，所以前端重连后要重新注册）。没有跨连接的全局状态。
 - `selected_processor` 的**默认优先级**：`tse` > `speaker_gate` > `passthrough`。
 - 连接一建立就发 `hello`：把当前能力 + 默认选择一次性告诉前端。
-- `tse`/`gate`/`asr` 此时都是 `None`——**真正的处理对象要等 `startExtraction` 才创建**。
+- `tse`/`gate`/`asr` 此时都是 `None`——**真正的处理对象要等 `startExtraction` 才创建**。但若默认选了 `tse`，发完 `hello` 会顺手 `kick_tse_preload()`：后台异步把分离引擎（262 MB 权重 + 一次预热推理）加载好，完成后发 `tseEngineReady` 事件通知前端解锁「开始注册」按钮。这样「权重加载那约 5 秒」被挪到了连上之后的空闲时段，而非压在「点开始提取」那一刻。
 
-#### ⑤ 主循环：二进制帧的三分支（`server.py:140-170`）★核心★
+#### ⑤ 主循环：二进制帧的三分支（`server.py:151-181`）★核心★
 
 ```python
 async for message in websocket:
     if isinstance(message, bytes):
-        session.accept_pcm16(message)              # ① 任何状态都先喂给状态机
+        try: session.accept_pcm16(message)         # ① 喂状态机(注册期累积 enrollment)
+        except SessionError: pass                   #    idle/ready 期音频帧静默丢弃,不刷 error
         if session.state == SessionState.EXTRACTING:
             rt["audio"] += len(message) / 32_000.0  # 累计已处理音频秒数
             if tse and asr:                         # 分支A:主路径 TSE
@@ -304,9 +307,11 @@ async for message in websocket:
                     text, final = await asyncio.to_thread(asr.accept_pcm16, target)  # ③ 对干净音频做ASR
                     await send(websocket, "transcript", text=text, final=final)
             elif gate:                              # 分支B:降级门控
-                for tr in await asyncio.to_thread(gate.accept_pcm16, message):
-                    await send(websocket, "transcript", **tr)
+                events, audio = await asyncio.to_thread(gate.accept_pcm16, message)
+                for pcm in audio: await websocket.send(pcm)            # ② 放行的目标段→前端回放
+                for tr in events: await send(websocket, "transcript", **tr)
             elif asr:                               # 分支C:直通诊断
+                await websocket.send(message)                          # ② 原音帧→前端回放
                 text, final = await asyncio.to_thread(asr.accept_pcm16, message)
                 await send(websocket, "transcript", text=text, final=final)
         continue
@@ -314,15 +319,17 @@ async for message in websocket:
 
 这段是整个系统的「心脏」，几个设计必须看懂：
 
-**a) 音频先过状态机，再决定要不要处理。** `session.accept_pcm16(message)` 永远调（注册阶段它就负责累积 enrollment）；只有 `state == EXTRACTING` 才进入三分支。
+**a) 音频先过状态机，再决定要不要处理。** `session.accept_pcm16(message)` 包在 `try/except SessionError` 里：注册阶段（ENROLLING）它累积 enrollment；idle/ready 期收到音频帧（前端采集与后端状态无法完美同步的窗口）**静默丢弃**而非报错刷屏；只有 `state == EXTRACTING` 才进入三分支。
 
 **b) 三分支是互斥的**，由 `startExtraction` 时创建了谁决定。`tse and asr` 优先 → 否则 `gate` → 否则 `asr`（passthrough）。三条路径同时只有一条活着。
+
+**b′) 三条路径都把「送进 ASR 的那段音频」回传前端。** TSE 发分离出的目标人声；门控发被相似度放行的整段（首次判定通过时补发前缀、之后逐帧流式）；直通原样回传每帧。这样切换模式时能直接听各路径的实时性差异（门控带切句延迟、TSE 带窗口延迟、直通最轻）。前端统一在 `onmessage` 里按 `Blob` 收二进制、`playback` 开关决定是否播放。
 
 **c) TSE 分支的精髓——ASR 拿到的是「分离后」的音频，不是原始混合音频。** 看 ②③ 的顺序：`tse.accept_pcm16(message)` 把混合音频分离成 `target`（目标人干净语音）→ **先发给前端回放** → **再把这个干净 target 喂给 ASR**。这就是「把鸡尾酒会问题从 ASR 身上卸下来」，ASR 只需识别单人干净语音。
 
 **d) `asyncio.to_thread`——阻塞推理不卡事件循环。** `tse.accept_pcm16` / `asr.accept_pcm16` 是 CPU 密集的同步调用（BSRNN、ONNX 推理），直接 `await` 会阻塞整个 asyncio 循环。用 `to_thread` 扔到线程池跑，主循环保持响应。这是「CPU 推理 + 异步 IO」混合的标准手法。
 
-**e) TSE 一次调用可能出 0 个或多个窗。** `for target in tse.accept_pcm16(...)`——128ms 一帧喂进来，大部分时候攒不满 2 秒窗，返回空列表（不进 for）；攒满时可能一次吐出 1 个窗甚至多个（积压追赶时）。
+**e) TSE 一次调用可能出 0 个或多个窗。** `for target in tse.accept_pcm16(...)`——128ms 一帧喂进来，大部分时候攒不满 1 秒窗，返回空列表（不进 for）；攒满时可能一次吐出 1 个窗甚至多个（积压追赶时）。
 
 **f) 首字延时与节流推送：**
 
@@ -333,14 +340,14 @@ if now - rt["last_send"] >= 0.4:
     await send(websocket, "metrics", ...)         # 每 0.4s 推一次指标，不刷屏
 ```
 
-#### ⑥ 主循环：JSON 命令（`server.py:171-235`）
+#### ⑥ 主循环：JSON 命令（`server.py:182-256`）
 
 二进制是音频，JSON 是控制。命令分发对应状态机：
 
 - `startEnrollment` → `session.start_enrollment()`
 - `finishEnrollment` → `session.finish_enrollment()`（校验 ≥3s）
 - `setModels` → 先查「没在 ENROLLING/EXTRACTING」，再校验所选模型 available，然后**把 asr/gate/tse 全置 None**（强制下次 startExtraction 重建链路）
-- `startExtraction`（`server.py:199-216`）★**搭链路的地方**★
+- `startExtraction`（`server.py:259-279`）★**搭链路的地方**★
 
 ```python
 elif command == "startExtraction":
@@ -350,21 +357,24 @@ elif command == "startExtraction":
         gate = SpeakerGate(asr, VAD_MODEL, SPEAKER_MODEL)
         gate.enroll_pcm16(bytes(session.enrollment))      # 门控:用注册语音建门限
     elif selected_processor == "tse":
-        tse = BufferedWeSepTse(TSE_MODEL, bytes(session.enrollment))  # ← 延迟①就在这
+        engine = await ensure_tse_engine()               # ← 连上时已后台预加载;这里多半已就绪
+        tse = await asyncio.to_thread(BufferedWeSepTse, engine, bytes(session.enrollment), VAD_MODEL)  # 算声纹+建VAD,丢线程池
     session.start_extraction()
     rt.update(start=time.perf_counter(), first_text=None, ...)   # 重置计时基准
 ```
 
+> **分离引擎在连上时就后台预加载了**（见下文「会话级引擎与预加载」），所以 `startExtraction` 里那句 `await ensure_tse_engine()` 几乎总是秒回——262 MB 权重那约 5 秒**早已在「连上服务 / 切到 TSE 之后」的空闲时段跑完**，不在点击「开始提取」的路径上。`ensure_tse_engine` 只是「万一注册特别快、加载还没收尾，就等它收尾」的兜底。
+
 **这一段解释了附录 A 的全部延迟**：点「开始提取」瞬间——
 
 1. `StreamingAsr(model)` 建 ASR；
-2. `BufferedWeSepTse(...)` 加载 BSRNN 权重 + 用 enrollment 算 ECAPA 声纹嵌入（几百 ms ~ 1s，**延迟①**）；
+2. `await ensure_tse_engine()` 拿到**早已后台加载好**的会话级引擎（权重那约 5 秒已在预加载阶段付掉，不在这里）；然后 `await asyncio.to_thread(BufferedWeSepTse, engine, enrollment, vad)` 用 enrollment 算 ECAPA 声纹嵌入并新建本次 VAD——这步首次实测约 2 秒，**故丢线程池**：直接 await 会阻塞事件循环，websocket ping 收不到回包、连接被超时掐断。换人也只走这步。额外传的 `VAD_MODEL` 用于静音窗门控（第 3 章）；
 3. 然后 `rt["start"]` 才被设为「现在」，后面所有 RTF/首字延时都从这里计时；
-4. 进入 EXTRACTING 后，音频要再攒满 2 秒窗才出第一段（**延迟②**）。
+4. 进入 EXTRACTING 后，音频要再攒满 1 秒窗才出第一段（**延迟②**）。
 
 `bytes(session.enrollment)` 把 bytearray 拷一份传出去，避免被后续修改影响。
 
-- `stopExtraction`（`server.py:217-231`）：停提取时要**冲尾巴**——
+- `stopExtraction`（`server.py:232-247`）：停提取时要**冲尾巴**——
 
 ```python
 session.stop_extraction()
@@ -378,9 +388,9 @@ if tse and asr:
 asr = None; gate = None; tse = None      # 释放链路
 ```
 
-`tse.flush()`（第 3 章）把不足 2 秒的尾巴零填到整窗再分离，避免最后几个字被丢。`asr.finish` 给 Paraformer 补那段 0.66s 尾部静音。
+`tse.flush()`（第 3 章）把不足 1 秒的尾巴零填到整窗再分离，避免最后几个字被丢。`asr.finish` 给 Paraformer 补那段 0.66s 尾部静音。
 
-#### ⑦ 错误处理与连接关闭（`server.py:236-259`）
+#### ⑦ 错误处理与连接关闭（`server.py:248-261`）
 
 ```python
 except (SessionError, json.JSONDecodeError) as error:
@@ -403,16 +413,18 @@ async def main():
 
 ### 3.1 TSE 主路径 `tse.py`
 
-算法含金量最高的文件（223 行）。按**对象的生命周期**讲：点「开始提取」时 `__init__` 做了什么 → 之后每一帧 `accept_pcm16` 怎么流动 → 停止时 `flush` 怎么收尾。
+算法含金量最高的文件（346 行），分两个类：`WeSepTseEngine`（会话级，加载一次权重）与 `BufferedWeSepTse`（每次提取，算声纹 + 缓冲）。按**对象的生命周期**讲：连接级引擎加载权重 → 点「开始提取」时 `BufferedWeSepTse.__init__` 只算声纹 → 之后每帧 `accept_pcm16` 怎么流动 → 停止时 `flush` 收尾。
 
-#### ① 常量 + 可用性判定（`tse.py:12-46`）
+#### ① 常量 + 可用性判定（`tse.py:12-61`）
 
 ```python
-WINDOW_SECONDS = 2          # BSRNN 必须凑满 2 秒才推理一次
+WINDOW_SECONDS = 2 → 1      # 这套 BSRNN 是 online 因果变体，对短窗友好；1 秒窗用 ~5dB SI-SDR 换首字延时减半
 CROSSFADE_SECONDS = 0.1     # 相邻窗重叠 0.1 秒做交叉淡化
+BACKLOG_TOLERANCE_SECONDS = 0.5   # 实时流积压超「窗口+0.5s」就丢最旧保延迟有界
+VOICE_RATIO_THRESHOLD = 0.05      # 窗内语音占比 < 5% 判静音，跳过 BSRNN 直接原声
 ```
 
-这两个常量决定了**整个系统的延迟下限和实时性**。`2` 是整窗模型的固有代价，`0.1` 是接缝平滑的宽度。
+这几个常量决定了**整个系统的延迟下限和实时性**。`WINDOW_SECONDS=1` 是分块推理的窗口（因果变体允许它比 2 秒小），`0.1` 是接缝平滑的宽度，后两个是扛实时麦克风流的两道保险（积压追赶 + VAD 门控，④ 节细讲）。
 
 ```python
 @dataclass(frozen=True)
@@ -427,40 +439,54 @@ class TseModel:
 
 `dependency_ready` 用 `importlib.util.find_spec` 探测，**不是真的 import**（避免探测时触发 wesep 的 import 问题，第 4 章解决）。
 
-#### ② `__init__`：点「开始提取」瞬间做的三件事（`tse.py:58-95`）
+#### ② 两个类：引擎（加载权重）+ 每次提取（算声纹）
+
+为什么拆两个类？约 262 MB 的 BSRNN 权重和「提取哪个注册人」无关，换人 / 停止再提取时**不该重新加载**。所以拆成：
+
+- **`WeSepTseEngine.__init__`（`tse.py:77-110`，会话级，一个连接只跑一次）**：打 wesep 运行时补丁 → `load_model_local` 加载权重（主要耗时）→ 设 cpu / 16k / 关 VAD / 关 output_norm → 算好窗口 / 合成窗等常量。
+- **`BufferedWeSepTse.__init__`（`tse.py:205-219`，每次提取都新建）**：拿引擎 + 本次注册语音 → 算一次声纹嵌入 → 初始化 OLA 缓冲 + 本次 VAD + 计数器。
 
 ```python
-def __init__(self, model, enrollment_pcm16):
-    from .wesep_loader import ensure_wesep_runtime   # ① 先打 wesep 的运行时补丁
-    ensure_wesep_runtime()
-    import torch
-    from wesep import load_model_local
-    self._torch.set_num_threads(os.cpu_count() or 4)
-    self._extractor = load_model_local(str(model.directory))   # ② 加载 BSRNN 权重
-    self._extractor.set_device("cpu"); set_resample_rate(16000); set_vad(False)
-    self._extractor.set_output_norm(False)             # 关掉逐窗归一化(OLA 需要幅度一致)
-    self._enrollment = self._to_tensor(enrollment_pcm16)
-    self._cached_spk_embedding = self._compute_enroll_embedding()   # ③ 算注册声纹(只算这一次)
-    self._window_samples = int(16000 * 2)              # = 32000 采样
-    self._cf_samples     = int(16000 * 0.1)            # = 1600 采样
-    self._hop_samples    = self._window_samples - self._cf_samples   # = 30400 采样(1.9s)
-    ...build synth_win...                              # 合成窗
-    self._in_buf = np.array([], dtype=np.float32)      # 输入累积缓冲
-    self._out_overlap = np.array([], dtype=np.float32) # OLA 输出重叠缓冲
+class WeSepTseEngine:                              # 会话级,一个连接只建一个
+    def __init__(self, model):
+        from .wesep_loader import ensure_wesep_runtime
+        ensure_wesep_runtime()                     # ① 先打 wesep 运行时补丁
+        import torch; from wesep import load_model_local
+        self._torch.set_num_threads(os.cpu_count() or 4)
+        self._extractor = load_model_local(str(model.directory))   # ② 加载 262MB 权重(主要耗时)
+        self._extractor.set_device("cpu"); set_resample_rate(16000); set_vad(False)
+        self._extractor.set_output_norm(False)     # 关掉逐窗归一化(OLA 需要幅度一致)
+        self._window_samples = 16000               # = 1 秒
+        self._hop_samples   = 14400                # = 0.9 秒
+        self._synth_win = ...                      # 合成窗
+        self._max_buf_samples = ...                # 积压上限
+
+class BufferedWeSepTse:                            # 每次提取新建;换人也只走这里(很快)
+    def __init__(self, engine, enrollment_pcm16, vad_model=None):
+        self._engine = engine
+        self._cached_spk_embedding = engine.compute_enroll_embedding(enrollment_pcm16)  # ③ 算声纹(只算一次)
+        self._in_buf / _out_overlap / _buf_voice = ...   # OLA 缓冲 + 语音标志(每次全新)
+        self._vad = self._create_vad(vad_model)    # 本次 VAD(每次新建)
+        self.dropped_seconds / silent_windows = 0  # 计数器
 ```
 
-三件事对应三种开销：① 打补丁（快）→ ② **加载权重到内存（主要耗时）** → ③ 算声纹嵌入（一次 ECAPA 推理）。
+三件事对应三种开销：① 打补丁（快）→ ② **加载权重（主要耗时，但一个连接只发生一次）** → ③ 算声纹嵌入（一次 ECAPA 推理，约 0.1 s）。
+
+> **换人为什么快**：权重在引擎里只装一次。换注册人时只新建 `BufferedWeSepTse`，只重算 ③ 的声纹（约 0.06 s），不再 ② 重载权重（约 5 s）。瓶颈从权重加载移到了算法必需的 1 秒窗口累积（见附录 A）。
+
+> **连上就后台预加载**：引擎那一步（② 加载权重 + ③ 的首次 ECAPA + 首次 BSRNN 前向）之所以不在「点开始提取」那一刻卡，是因为 `server.py` 连上 / 切到 TSE 时就 `kick_tse_preload()` 起了个后台任务：`asyncio.to_thread(WeSepTseEngine, TSE_MODEL)` 加载权重，再跑一次 `engine.warmup()`（静音空转一次 ECAPA + 单窗 BSRNN，触发 PyTorch 惰性内存分配与内核选择，结果丢弃）。完成后发 `tseEngineReady` 事件，前端据此把「开始注册」按钮从「加载模型中…」解锁为「开始注册」。预热把首次真实提取的首窗推理从冷启动约 0.93 s 降到稳态约 0.76 s、声纹嵌入从约 0.5 s 降到约 0.06 s——这笔约 1.4 秒的预热成本全落在连上后的空闲时段，不占点击路径。
 
 关键开关：
 
 - `set_vad(False)`：TSE 自己就是「按目标人提取」，不需要 WeSep 内置 VAD 再切。
 - `set_output_norm(False)`：**OLA 的命根子**。若每窗输出各自归一化到 0.9 峰值，相邻窗在接缝处增益会跳变，拼起来就是「咔哒」声。关掉它让幅度跨窗连续，靠后面 clip 兜底。
+- **VAD 放在 `BufferedWeSepTse` 而非引擎**：Silero VAD 检测器有内部缓冲状态，跨注册人复用会让上一个人的尾音污染下一个人的判定，所以每次提取新建。
 
-#### ③ `_compute_enroll_embedding`：注册声纹只算一次（`tse.py:97-108`）
+#### ③ `compute_enroll_embedding`：注册声纹只算一次（`tse.py:116-129`，引擎方法）
 
 ```python
-def _compute_enroll_embedding(self):
-    enroll = self._enrollment.to(self._device)
+def compute_enroll_embedding(self, enrollment_pcm16):
+    enroll = self._to_tensor(enrollment_pcm16).to(self._device)
     feats = self._extractor.compute_fbank(enroll, sample_rate=16000, cmn=True)  # 梅尔滤波器组 + CMN
     feats = feats.unsqueeze(0)
     with torch.no_grad():
@@ -471,44 +497,56 @@ def _compute_enroll_embedding(self):
     return spk_embedding
 ```
 
-注册语音在这被「凝固」成一个说话人向量，存进 `self._cached_spk_embedding`。**之后每个窗分离时直接拿缓存用，不再跑 ECAPA**——既省 CPU 又保证条件一致。`compute_fbank` 的 `cmn=True` 是倒谱均值归一，去掉信道色染。
+注册语音在这被「凝固」成一个说话人向量，存进 `BufferedWeSepTse._cached_spk_embedding`。**之后每个窗分离时直接拿缓存用，不再跑 ECAPA**——既省 CPU 又保证条件一致。`compute_fbank` 的 `cmn=True` 是倒谱均值归一，去掉信道色染。
 
-#### ④ 每一帧：`accept_pcm16` 的累积循环（`tse.py:188-200`）★
+#### ④ 每一帧：`accept_pcm16` 的累积循环（`tse.py:288-323`）★
 
-这是 TSE 的节拍器：
+这是 TSE 的节拍器，三件事：给每帧打 VAD 标志 → 积压追赶 → 攒满窗就分离（静音窗直接原声直通）。
 
 ```python
 def accept_pcm16(self, chunk: bytes) -> list[bytes]:
     samples = np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0   # PCM16→float
     self._in_buf = np.concatenate([self._in_buf, samples])    # 往输入缓冲里攒
+    if self._vad is not None:                                  # 给本帧打语音标志
+        self._vad.accept_waveform(samples); voice = bool(self._vad.is_speech_detected())
+    else:
+        voice = True                                           # 无 VAD:保守按有语音处理
+    self._buf_voice = np.concatenate([self._buf_voice, np.full(len(samples), voice)])  # 与 _in_buf 对齐
+    self._shed_backlog()                                       # 积压追赶:超窗+容忍量就丢最旧
     outputs = []
-    while len(self._in_buf) >= self._window_samples:          # 攒满 32000(2秒)才进
-        start = time.perf_counter()
-        window = self._in_buf[: self._window_samples]         # 取一个 2 秒窗
-        seg = self._extract_float(window) * self._synth_win   # 分离 × 合成窗
-        self._ola_add(seg)                                     # 叠进 OLA 输出缓冲
-        outputs.append(self._to_pcm16(self._ola_take(self._hop_samples)))  # 取走 1.9s 输出
-        self.last_extract_ms = (time.perf_counter() - start) * 1000.0       # 记单窗耗时
-        self._in_buf = self._in_buf[self._hop_samples:]       # 输入缓冲前进 1.9s
+    while len(self._in_buf) >= self._window_samples:           # 攒满 16000(1秒)才进
+        window = self._in_buf[: self._window_samples]
+        voice_ratio = float(np.mean(self._buf_voice[: self._window_samples])) if self._vad else 1.0
+        if voice_ratio < VOICE_RATIO_THRESHOLD:                # 静音窗:原声×合成窗,跳过 BSRNN
+            self.silent_windows += 1
+            seg = window * self._synth_win
+        else:                                                  # 有语音窗:真分离
+            start = time.perf_counter()
+            seg = self._engine.extract_float(window, self._cached_spk_embedding) * self._synth_win
+            self.last_extract_ms = (time.perf_counter() - start) * 1000.0
+        self._ola_add(seg)                                     # 叠进 OLA 输出缓冲(无论哪条路都走 OLA)
+        outputs.append(self._to_pcm16(self._ola_take(self._hop_samples)))  # 取走 0.9s 输出
+        self._in_buf = self._in_buf[self._hop_samples:]        # 输入缓冲前进 0.9s
+        self._buf_voice = self._buf_voice[self._hop_samples:]  # 语音标志同步前进
     return outputs
 ```
 
 逐行拆：
 
 1. **PCM16 → float**：`np.frombuffer(dtype="<i2")` 小端 16 位整数，除 32768 归一化到 [-1, 1]。
-2. **累积**：`_in_buf` 不断 append。**没攒满 32000 采样，while 不进，返回空 list**——这就是「点完提取后还要等 ~2 秒才出第一个字」的根因。
-3. **攒满后取一个 2 秒窗** → `_extract_float` 分离 → 乘合成窗 → OLA 叠加。
-4. **取走 `_hop_samples = 30400`（1.9 秒）** 作为输出，转回 PCM16 发出去。
-5. **输入缓冲前进 1.9 秒**（不是 2 秒）——留下的 0.1 秒是下一窗要重叠的区域。
+2. **VAD 打标志 + 对齐**：`_buf_voice` 是与 `_in_buf` **一一对齐**的布尔数组——每窗能直接用切片算"窗内语音帧占比"，给下面的门控用。
+3. **积压追赶 `_shed_backlog`**：`_in_buf` 超过 `_max_buf_samples`（窗口 + 0.5s）就丢最旧、只留最新一窗（`_buf_voice` 一起切）。**没攒满 16000 采样，while 不进，返回空 list**——这就是「点完提取后还要等 ~1 秒才出第一个字」的根因。
+4. **攒满后取一个 1 秒窗**，按 `voice_ratio` 分两条路：静音窗直接 `window × synth_win`（**跳过 BSRNN，~0 CPU**），有语音窗才 `_extract_float` 真分离。**两条路都乘合成窗、都走 OLA**——所以静音/有语音的接缝处照样交叉淡化，输出连续。
+5. **取走 `_hop_samples = 14400`（0.9 秒）** 作为输出，转回 PCM16 发出去；`_in_buf` 与 `_buf_voice` 同步前进 0.9 秒——留下的 0.1 秒是下一窗要重叠的区域。
 
-`while` 一次调用可能连续出多个窗——CPU 积压、`_in_buf` 已攒好几窗时，这里一口气追赶。正常实时跟随时一次出 0 或 1 个窗。
+`while` 一次调用可能连续出多个窗——但注意：真正的"积压追赶"由 `_shed_backlog` 把缓冲削到一窗，所以这里最多连出 1~2 个窗就追平了，不会一口气吐一大串。
 
-#### ⑤ `_forward_cached`：BSRNN 前向（`tse.py:110-152`）— 最硬核的一段
+#### ⑤ `_forward_cached`：BSRNN 前向（`tse.py:131-173`，引擎方法）— 最硬核的一段
 
 这是**手动重写**了 `wesep.models.bsrnn.BSRNN.forward`，唯一改动是「把缓存的注册嵌入直接喂进去，跳过每窗 ECAPA」。信号流是标准频域分离五步（逐步图解 + 公式见 [TSE-DEEP-DIVE.md](TSE-DEEP-DIVE.md)）：
 
 ```
-wav(2s时域)
+wav(1s时域)
   │ ① torch.stft                      → 复数频谱 spec
   │ ② 拆子带 (real/imag 两路)          → subband_spec
   │ ③ 每个 BN 层降维                   → subband_feature
@@ -523,7 +561,7 @@ wav(2s时域)
 
 ```python
 # ④ 分离核:子带特征 + 注册声纹 → 掩蔽
-sep_output = model.separator(subband_feature, self._cached_spk_embedding, torch.tensor(nch))
+sep_output = model.separator(subband_feature, spk_embedding, torch.tensor(nch))
 
 # ⑤ 复数比例掩蔽 CRM(real/imag 两路)
 this_mask = this_output[:, 0] * torch.sigmoid(this_output[:, 1])   # 门控:幅值×sigmoid(掩蔽)
@@ -537,11 +575,11 @@ est_imag = mix.real * mask_i + mix.imag * mask_r
 - **掩蔽 × 原始混合频谱**：`est = mask ⊗ mix`——掩蔽只是「比例」，真正改写波形的是拿它去乘原始混合信号的频谱。所以输出是「从混合里抠出目标」。
 - **第 ④ 步的 `self._cached_spk_embedding`**：这就是「注册声纹当条件」的注入点。没有它，separator 不知道该抠谁。
 
-#### ⑥ OLA：为什么相邻两窗能无缝拼起来（`tse.py:82-91, 175-186`）
+#### ⑥ OLA：为什么相邻两窗能无缝拼起来（`tse.py:102-108, 264-275`）
 
-问题：每个 2 秒窗是**独立**估掩蔽的，两窗在接缝处的掩蔽不一致，直接首尾相接会在边界丢/畸变一个字。解决办法是**重叠相加 + 合成窗**。
+问题：每个 1 秒窗是**独立**估掩蔽的，两窗在接缝处的掩蔽不一致，直接首尾相接会在边界丢/畸变一个字。解决办法是**重叠相加 + 合成窗**。
 
-**合成窗的构造**（`__init__` 里）：
+**合成窗的构造**（引擎 `__init__` 里）：
 
 ```python
 ramp = np.linspace(0.0, 1.0, self._cf_samples, endpoint=False)   # 0→1 的 1600 点斜坡
@@ -551,7 +589,7 @@ win[-self._cf_samples:] = 1.0 - ramp           # 窗尾:1→0 渐出
 self._synth_win = win
 ```
 
-形状是一个「平顶梯形」：中间 1.8 秒恒为 1，两头各 0.1 秒线性渐变。
+形状是一个「平顶梯形」：中间 0.9 秒恒为 1，两头各 0.1 秒线性渐变。
 
 **OLA 的叠加规则**（`_ola_add` / `_ola_take`）：
 
@@ -559,7 +597,7 @@ self._synth_win = win
 def _ola_add(self, seg):        # 把本窗输出(已乘 synth_win)叠到输出缓冲
     ...self._out_overlap[:n] += seg
 
-def _ola_take(self, hop):       # 从输出缓冲取走前 hop(1.9s),剩下的留作下窗重叠
+def _ola_take(self, hop):       # 从输出缓冲取走前 hop(0.9s),剩下的留作下窗重叠
     ready = self._out_overlap[:hop].copy()
     self._out_overlap = self._out_overlap[hop:]
     return ready
@@ -569,9 +607,9 @@ def _ola_take(self, hop):       # 从输出缓冲取走前 hop(1.9s),剩下的�
 
 这就是注释里说的 **「overlap-add reconstructs unity」(COLA 常数重叠相加)**：重叠区两窗窗值之和正好是 1，输出 = 两窗分离结果的**加权平均**（交叉淡化）；非重叠的中段窗值恒 1，输出 = 分离结果本身。整体重构出无失真波形，只在接缝处把两个不一致的掩蔽平滑过渡过去。
 
-**为什么 hop = window − crossfade（1.9s），不是常见的 50% 重叠？** 50% 重叠每个采样处理两遍，RTF 翻倍；这里 `RTF ≈ window/hop ≈ 2/1.9 ≈ 1.05`，几乎零额外开销却仍无缝。这是**用最小重叠换最大算力效率**的精算。
+**为什么 hop = window − crossfade（0.9s），不是常见的 50% 重叠？** 50% 重叠每个采样处理两遍，RTF 翻倍；这里 `RTF ≈ window/hop ≈ 1/0.9 ≈ 1.11`，几乎零额外开销却仍无缝。这是**用最小重叠换最大算力效率**的精算。
 
-#### ⑦ `flush`：停止时把尾巴冲干净（`tse.py:202-223`）
+#### ⑦ `flush`：停止时把尾巴冲干净（`tse.py:325-346`）
 
 ```python
 def flush(self):
@@ -580,26 +618,29 @@ def flush(self):
     if tail_len >= int(16000 * 2 * 0.3):             # 尾巴 ≥0.6s 才值得再分离一次
         window = np.zeros(self._window_samples)      # 零填到整窗
         window[:n] = self._in_buf[:n]
-        seg = self._extract_float(window) * self._synth_win
+        seg = self._engine.extract_float(window, self._cached_spk_embedding) * self._synth_win
         self._ola_add(seg)
         take = min(len(self._out_overlap), max(self._cf_samples, n))   # 只取真实音频占据的部分
     outputs.append(self._to_pcm16(self._out_overlap[:take]))
 ```
 
-停止提取时，`_in_buf` 里通常还剩不到 2 秒。`flush` 把它**零填到整窗再分离**，但**只取真实音频占据的输出段**，避免末尾被静音填充或丢字。
+停止提取时，`_in_buf` 里通常还剩不到 1 秒。`flush` 把它**零填到整窗再分离**，但**只取真实音频占据的输出段**，避免末尾被静音填充或丢字。
 
 #### `tse.py` 设计要点速查
 
 | 设计 | 解决的问题 |
 |---|---|
-| 整窗 2s + OLA | BSRNN 是非因果整窗模型，OLA 让相邻窗无缝拼接 |
+| 整窗 1s（online 因果变体）+ OLA | 因果变体允许短窗，OLA 让相邻窗无缝拼接 |
+| 引擎/提取两层（WeSepTseEngine + BufferedWeSepTse） | 权重连接级只装一次，换人只重算声纹（~0.1s 而非重载 ~5s） |
 | 注册嵌入算一次缓存 | 跳过每窗 ECAPA，省算力 + 条件一致 |
 | `_forward_cached` 重写 forward | 注入缓存的声纹条件，复刻 BSRNN 信号流 |
 | 合成窗 ramp + (1-ramp) | COLA:重叠区恒为 1，无失真重构 |
-| hop = window − crossfade | 最小重叠换最高算力效率，RTF≈1.05 |
+| hop = window − crossfade | 最小重叠换最高算力效率，RTF≈1.11 |
 | 关 output_norm | 跨窗幅度连续，避免接缝「咔哒」 |
+| 积压追赶 `_shed_backlog` | 实时流落后时丢最旧保延迟有界（正常负载空操作） |
+| VAD 门控（静音窗直通） | 静音段跳过 BSRNN ~0 CPU，仍走 OLA 保持连续 |
 
-代价：**2 秒整窗 = 固有延迟**。这类频域分离模型在 CPU 上的本质限制。
+代价：**1 秒整窗 = 固有延迟**（比 2 秒减半）。这类频域分离模型在 CPU 上的本质限制；积压追赶 + VAD 门控让它扛得住永不停顿的实时麦克风流。
 
 ### 3.2 流式 ASR `asr.py`
 
@@ -706,28 +747,32 @@ class SpeakerGate:
         self._threshold = threshold        # 相似度门槛 0.5
 ```
 
-三个零件：**Silero VAD**（切语音段）+ **ER2Net 声纹**（算嵌入）+ **复用的 ASR**（转写）。ASR 是构造时传进来的（`server.py:207`），门控自己不建 ASR，共用同一个。
+三个零件：**Silero VAD**（切语音段）+ **ER2Net 声纹**（算嵌入）+ **复用的 ASR**（转写）。ASR 是构造时传进来的（`server.py:216`），门控自己不建 ASR，共用同一个。
 
 `enroll_pcm16` 把注册语音算成声纹并**归一化**：`self._enrollment = embedding / (norm(embedding) + 1e-8)`（存单位向量，后面 cosine 更快更稳）。
 
-#### ② `accept_pcm16`：VAD 驱动的「一句话」状态机（`speaker_gate.py:61-75`）★
+#### ② `accept_pcm16`：VAD 驱动的「一句话」状态机（`speaker_gate.py:69-102`）★
 
 ```python
-def accept_pcm16(self, chunk):
+def accept_pcm16(self, chunk) -> tuple[list[dict], list[bytes]]:
     self._vad.accept_waveform(samples)
+    was_accepted = self._accepted
     speech = self._vad.is_speech_detected()
     if speech and not self._speech_active:    # ① 话开始(静→有声)
-        self._begin_utterance(samples); return self._emit_partial()
+        self._begin_utterance(samples); events = self._emit_partial()
     if speech and self._speech_active:        # ② 话进行中(声→声)
-        self._chunks.append(samples); self._asr.feed(...); return self._emit_partial()
+        self._chunks.append(samples); self._asr.feed(...); events = self._emit_partial()
     if not speech and self._speech_active:    # ③ 话结束(声→静)
-        self._asr.feed(...); return self._finish_utterance()
-    return []                                  # ④ 持续静默:啥也不做
+        self._asr.feed(...); events, _ = self._finish_utterance()
+    # 返回 (转写事件, 可回放音频)
+    if self._accepted and self._speech_active:
+        audio = [整段前缀] if not was_accepted else [chunk]   # 首次接受补发前缀，之后逐帧流式
+    return events, audio
 ```
 
-这是个由 VAD 驱动的「一句话生命周期」：**开始 → 进行 → 结束**，四态分明。`min_silence_duration=0.3` 决定要多长的停顿才算「这句话讲完了」。
+这是个由 VAD 驱动的「一句话生命周期」：**开始 → 进行 → 结束**，四态分明。`min_silence_duration=0.3` 决定要多长的停顿才算「这句话讲完了」。返回值除了转写事件，还有「可回放音频」：一旦本句累计相似度判为接受，先把此前累积的整段（前缀）一次性补发、之后逐帧流式——这样前端能听到完整的放行语音、且只在接受的段发声，便于和 TSE/直通对比实时性（详见 4.3 的分支 B）。
 
-#### ③ `_emit_partial`：边说边判声纹的早判定（`speaker_gate.py:86-102`）★最聪明的设计★
+#### ③ `_emit_partial`：边说边判声纹的早判定（`speaker_gate.py:113-130`）★最聪明的设计★
 
 ```python
 def _emit_partial(self):
@@ -749,12 +794,12 @@ def _emit_partial(self):
 - **一旦某次相似度 ≥ 0.5，`_accepted = True` 永久置位**——这句话后面一路放行，不再复判；
 - 在 `_accepted` 之前，即使 ASR 已经认出字，**也不输出**——「还没确认是目标人，先别出字幕」。
 
-效果：目标人开口 0.6s 内就能「认出」并开始出字幕，延迟远低于 TSE 的 2 秒整窗——这是门控路径**唯一比 TSE 快的地方**（代价是处理不了重叠）。
+效果：目标人开口 0.6s 内就能「认出」并开始出字幕，延迟低于 TSE 的 ~1.7 秒（1 秒整窗 + 加载）——这是门控路径**比 TSE 快的地方**（代价是处理不了重叠）。
 
-#### ④ `_finish_utterance`：收尾判定（`speaker_gate.py:104-113`）
+#### ④ `_finish_utterance`：收尾判定（`speaker_gate.py:132-143`）
 
 ```python
-def _finish_utterance(self):
+def _finish_utterance(self) -> tuple[list[dict], list[bytes]]:
     text = self._asr.finish(self._stream)                # 冲尾部(Paraformer 的 0.66s padding 在这生效)
     similarity = self._similarity() if text else 1.0
     accepted = bool(text) and similarity >= 0.5
@@ -762,16 +807,16 @@ def _finish_utterance(self):
     if accepted:
         events.append({"text": text, "final": True, "similarity": round(similarity, 3)})
     events.append({"text": "", "final": False, "similarity": None})   # 清前端 partial 显示
-    return events
+    return events, []                                    # 音频早已在 accept_pcm16 里流式发完,句末不再补
 ```
 
-一句话结束（VAD 检测到静音）：冲完尾部 → 用**整句**的声纹做最终判定 → 像目标人就发 `final=True` 定稿，不像就丢弃。末尾空 partial 用来**清掉前端正在显示的 partial 字幕**。
+一句话结束（VAD 检测到静音）：冲完尾部 → 用**整句**的声纹做最终判定 → 像目标人就发 `final=True` 定稿，不像就丢弃。末尾空 partial 用来**清掉前端正在显示的 partial 字幕**。返回的第二个元素恒为空——可回放音频在 `accept_pcm16` 里已流式发完，收尾不再补发。
 
 ### 3.4 三链路对比
 
 | 路径 | 做什么 | 改波形? | 重叠语音 | 首字延时 |
 |---|---|---|---|---|
-| **tse** | BSRNN 把目标人波形从混合里抠出来，再 ASR | ✅ | ✅ 能分离 | ~2s（整窗） |
+| **tse** | BSRNN 把目标人波形从混合里抠出来，再 ASR | ✅ | ✅ 能分离 | ~1.7s（1秒整窗） |
 | **speaker_gate** | VAD 切段 → 声纹门控决定转不转写 | ❌ | ❌ 失真 | ~0.6s（早判定） |
 | **passthrough** | 原音直接 ASR | ❌ | —（不区分人） | 最快（诊断用） |
 
@@ -886,7 +931,7 @@ def ensure_wesep_runtime():       # 唯一公开入口
         _seed_stub(dotted, attrs)
 ```
 
-在 `tse.py:62-64`，`import wesep` 之前调一次。三个内部函数开头都有 `if sys.modules.get(...) is not None: return`，所以**幂等**。
+在 `tse.py:81`（`WeSepTseEngine.__init__` 里），`import wesep` 之前调一次。三个内部函数开头都有 `if sys.modules.get(...) is not None: return`，所以**幂等**。
 
 > 提醒：`importlib.find_spec` 的目录查找在进程启动时就建好缓存，所以**装新依赖后必须重启后端**，旧进程发现不了。
 
@@ -1023,7 +1068,7 @@ function startFileStream(buffer, kind, onDone) {
 
 ### 5.5 分离音频回放 `enqueueSeparatedAudio`（`App.vue:286-300`）★巧设计★
 
-后端 TSE 路径会把「分离出的目标人音频」二进制发回来。难点：片段是**异步、不定期**到达的，怎么播得连续无断裂？
+后端三种处理路径都会把二进制音频发回来（TSE=分离目标人声、门控=放行段、直通=原音帧），前端统一在这里播放。难点：片段是**异步、不定期**到达的，怎么播得连续无断裂？
 
 ```ts
 function enqueueSeparatedAudio(pcm16) {
@@ -1076,16 +1121,18 @@ async function toggleExtraction() {
   }
   if (sourceMode === 'file' && !mixBuffer.value) { notice = '请先选择混合音频文件'; return }
   sendCommand('startExtraction')                    // ① 发命令
-  if (sourceMode === 'file') {
-    await waitForState('extracting')                // ② 等后端把链路搭好(延迟①)
-    startFileStream(mixBuffer.value!, 'mix', () => sendCommand('stopExtraction'))  // ③ 开始按速率灌
-  } else {
-    await startCapture()                            // 麦克风:直接采集
-  }
+  if (await waitForState('extracting', 10000)) {    // ② 两种模式都等后端确认进入 extracting(TSE 构造要数秒→超时 10s)
+    if (sourceMode === 'file')
+      startFileStream(mixBuffer.value!, 'mix', () => sendCommand('stopExtraction'))  // ③ 开始按速率灌
+    else
+      await startCapture()                          // 麦克风:确认后才采集,避免 ready 期发的帧被后端丢弃
+  }                                                 //    waitForState 失败则不启动采集(后端另发 error 提示原因)
 }
 ```
 
-**`waitForState('extracting')` 对应延迟①**：发完 `startExtraction`，前端要等后端搭好链路（加载 BSRNN + 算嵌入 + 回 `state=extracting`）才开始喂文件。每 40ms 轮询 `state.value`，2 秒超时。这正是「点完提取、进度条迟迟不动」的那一下。
+**`waitForState('extracting', 10000)`——两种模式都等后端确认**：发完 `startExtraction`，后端建 ASR + `await ensure_tse_engine()`（引擎早已后台预加载好）+ `to_thread(BufferedWeSepTse)`（算注册声纹 + 新建 VAD，首次约 2 秒）+ 回 `state=extracting`。**麦克风模式也等这步确认后再 `startCapture`**，避免在 ready 窗口期发的帧被后端静默丢弃；超时（10 秒）或后端失败则不启动采集。权重那约 5 秒早已在连上之后的预加载阶段付掉、不在这一步。每 40ms 轮询 `state.value`。
+
+> 配套的前端反馈：连上 / 切到 TSE 后，引擎后台加载期间「开始注册」按钮显示「加载模型中…」并禁用（`tseLoading` / `enrollDisabled` / `enrollLabel` 计算属性），收到后端 `tseEngineReady` 事件才解锁。所以用户不会在引擎还没好时去点「开始提取」。
 
 ### 5.8 模板结构（`App.vue:492-673`，简要）
 
@@ -1140,62 +1187,57 @@ workspace
 | 壳 | `electron/*`、`main.ts` | 把 Vue 装进桌面、放行麦克风、连 Vite |
 | 编排 | `server.py` | 单循环、每连接一会话、三分支分发、推指标 |
 | 规则 | `session.py` | 四态状态机，注册/提取互斥，enrollment 缓冲 |
-| 分离 | `tse.py` | BSRNN 整窗 2s + OLA 无缝拼接 + 声纹缓存 |
+| 分离 | `tse.py` | BSRNN 整窗 1s + OLA 无缝拼接 + 声纹缓存 + 积压追赶/VAD 门控 |
 | 识别 | `asr.py` | Sherpa 流式，Transducer 靠端点 / Paraformer 靠尾部 padding |
 | 降级 | `speaker_gate.py` | VAD 切段 + 声纹相似度门控，边说边判 |
 | 垫片 | `wesep_loader.py` | 启动前给 `sys.modules` 打补丁，让残缺 wheel 能跑 |
 | 界面 | `App.vue` | 瘦客户端：采集/灌入 + 事件分发 + 渲染 |
 
-**整套系统的本质**：用一段注册语音当「条件」，从混合音频里**先分离出目标人波形**（TSE），再对**干净波形**做流式 ASR——把「鸡尾酒会问题」从识别器身上卸下来。代价是 2 秒整窗的固有延迟，这是这类频域分离模型在 CPU 上的硬限制。
+**整套系统的本质**：用一段注册语音当「条件」，从混合音频里**先分离出目标人波形**（TSE），再对**干净波形**做流式 ASR——把「鸡尾酒会问题」从识别器身上卸下来。代价是 1 秒整窗的固有延迟（因果变体允许它比 2 秒小），叠加积压追赶 + VAD 门控扛住实时流；这是这类频域分离模型在 CPU 上的硬限制。
 
 ---
 
-## 附录 A：为什么「开始提取」后有 ~3 秒延迟
+## 附录 A：为什么「开始提取」后有 ~1.7 秒延迟
 
 > 这是初次阅读代码时最容易困惑的现象：注册阶段感觉「瞬间完成」，但点完「开始提取」后，要等一下才开始出字幕。根因不是 bug，是 BSRNN 整窗分离的固有代价。
 
-### 根本原因：与注册无关，是「整窗分离」要攒满 2 秒
+### 根本原因：与注册无关，是「整窗分离」要攒满 1 秒
 
 感觉到的「等一下」其实由**两段独立延迟叠加**而成，都发生在「提取」阶段。
 
-#### 延迟①:点击「开始提取」那一刻的后端初始化（几百 ms ~ 1 秒）
+#### 延迟①:权重加载（已挪到「连上之后」的空闲时段，不在点击路径上）
 
-前端流程（`App.vue:459-463`）：
+> **这一段在引入连接级预加载后已基本从「点开始提取」的延迟里消失了**——保留这段是为了说明它去哪儿了、以及为什么「开始注册」按钮会先显示「加载模型中…」。
 
-```ts
-sendCommand('startExtraction')
-await waitForState('extracting')   // ← 卡在这里,等后端准备好
-startFileStream(...)               // 准备好了才开始喂文件
-```
+约 262 MB 的 WeSep BSRNN 权重加载（含首次 `import torch` + wesep 运行时补丁）实测约 5–6 秒。它和「提取哪个注册人」无关，所以不放在点击路径上，而是在两个时机后台预加载（`kick_tse_preload`，`server.py:151-173`）：
 
-后端收到 `startExtraction` 后，在回 `state=extracting` **之前**要做这些（`server.py:209-214` → `tse.py:58-80`）：
+1. **连上服务**时（默认就选 `tse`）：发完 `hello` 立即起后台任务 `asyncio.to_thread(WeSepTseEngine, TSE_MODEL)`；
+2. **`setModels` 切到 `tse`** 时：同样起后台任务（已加载则立即通知就绪）。
 
-1. `load_model_local()` —— 加载 WeSep BSRNN 权重到内存；
-2. `_compute_enroll_embedding()` —— 用 ECAPA 把注册语音**算成说话人向量**，缓存起来当分离条件；
-3. `set_num_threads`、第一次 PyTorch 推理的预热开销。
+引擎加载完后，再跑一次 `engine.warmup()`（静音空转 ECAPA + 单窗 BSRNN，约 1.4 秒，触发 PyTorch 惰性分配与内核选择，结果丢弃）。两步都完成后，后端发 `tseEngineReady` 事件，**前端据此把「开始注册」按钮从「加载模型中…」解锁为「开始注册」**（`App.vue` 的 `tseLoading` / `enrollDisabled` / `enrollLabel` 计算属性）。
 
-这一步是**首次加载模型 + 首次推理**，CPU 上通常几百毫秒到 1 秒。这段就是「点完按钮、文件进度条迟迟不动」的那一下。
+`startExtraction` 里的 `await ensure_tse_engine()` 此时几乎总是秒回（引擎早已就绪）；它只是「万一注册特别快、加载还没收尾，就等它收尾」的兜底。也就是说：**那约 5 秒 + 1.4 秒预热全落在「连上服务 → 注册」之间的空闲墙钟里**，你感觉不到；真正点「开始提取」时，权重早已在内存里、首次推理也早已预热过。
 
-#### 延迟②:必须攒满一个 2 秒窗口，才出第一段音频（实打实的 ~2 秒）← 主要原因
+#### 延迟②:必须攒满一个 1 秒窗口，才出第一段音频（实打实的 ~1 秒）← 主要原因
 
-BSRNN 是**非因果、整窗模型**：必须凑满一整个窗口才能做一次分离推理。窗口写死在 `tse.py:13`：
+这套 BSRNN 是 **online（因果）变体**，但仍按整窗推理：必须凑满一整个窗口才能做一次分离。窗口在 `tse.py:18`：
 
 ```python
-WINDOW_SECONDS = 2      # = 32000 个采样
+WINDOW_SECONDS = 1      # = 16000 个采样
 ```
 
-看 `accept_pcm16` 的累积逻辑（`tse.py:188-200`）：
+看 `accept_pcm16` 的累积逻辑（`tse.py:288-323`）：
 
 ```python
 self._in_buf = np.concatenate([self._in_buf, samples])   # 先往缓冲里攒
 outputs = []
-while len(self._in_buf) >= self._window_samples:         # ← 攒满 32000(2秒)才进
+while len(self._in_buf) >= self._window_samples:         # ← 攒满 16000(1秒)才进
     ...分离、产出 target 音频...
     outputs.append(...)
 return outputs      # 没攒满时,返回空 list
 ```
 
-没攒满 2 秒，返回**空列表**，ASR 收不到分离音频，自然出不了字幕。而文件模式又是按**真实速率**喂的（`App.vue:364`，每 128ms 一帧），所以「攒满 2 秒」需要约 **2 秒墙钟时间**——这就是「进度条已经在动、字幕却迟迟不出来」的那一段。
+没攒满 1 秒，返回**空列表**，ASR 收不到分离音频，自然出不了字幕。而文件模式又是按**真实速率**喂的（`App.vue:364`，每 128ms 一帧），所以「攒满 1 秒」需要约 **1 秒墙钟时间**——这就是「进度条已经在动、字幕却迟迟不出来」的那一段。
 
 #### 还有 ASR 自己的一点尾巴
 
@@ -1204,19 +1246,26 @@ return outputs      # 没攒满时,返回空 list
 - **Paraformer** 需要 **0.66 秒尾部静音 padding** 才能把尾部上下文冲出来（`asr.py:53`）；
 - **Zipformer** 靠端点检测切句，也要等到一个停顿。
 
-### 加起来 ≈ 2~3 秒
+### 加起来
 
 ```
-点「开始提取」
+连上服务 / 切到 TSE 之后（后台预加载,空闲时段,不卡任何点击）:
    │
-   ├─ 延迟① 模型加载 + 算注册嵌入(ECAPA)   ~0.5–1 s   (waitForState 等的就是它)
+   ├─ 后台加载 262MB BSRNN 权重 + import torch    ~5–6 s   ← 你感觉不到
+   ├─ warmup 静音空转(ECAPA + 单窗 BSRNN 首推)    ~1.4 s   ← 你感觉不到
+   └─ 发 tseEngineReady → 前端把「加载模型中…」解锁成「开始注册」
+
+点「开始提取」(无论连接内首次还是中途换陌生人,引擎均已就绪):
    │
-   └─ 延迟② 攒满 2 秒 BSRNN 窗口            ~2 s      (文件已按真实速率在喂)
+   ├─ 算注册声纹嵌入(ECAPA,已预热)              ~0.06 s   ← 几乎瞬时
+   │
+   └─ 延迟② 攒满 1 秒 BSRNN 窗口                  ~1 s     (文件已按真实速率在喂)
             │
-            └─ 第一段分离音频 → ASR → 首字    (+端点/padding)
+            └─ 首窗 BSRNN 前向(已预热) ~0.76s → 第一段分离音频 → ASR → 首字 (+端点/padding ~0.66s)
+   合计 ≈ 2.5 秒
 ```
 
-正好对应 UI 里写的「约 3 秒缓冲」。这是**可验证效果的 CPU 实验模式，不是低延迟真流式**。
+引入连接级预加载前，「首次点开始提取」要付 ~6 秒（5 秒权重 + 1 秒窗口），换人才降到 ~1.7 秒；现在那份 ~5 秒 + 1.4 秒预热全挪到了连上之后的空闲时段，**首次与换人的点击路径几乎一样长（都约 2.5 秒）**。剩下的延迟②（攒满 1 秒窗口）是因果 BSRNN 整窗分离的固有代价，无法靠预加载消除。
 
 ### 为什么注册阶段没这种感觉
 
@@ -1224,6 +1273,6 @@ return outputs      # 没攒满时,返回空 list
 
 ### 一句话总结
 
-**不是 bug，是 BSRNN 整窗分离的固有代价**——点提取时要先花 ~1 秒加载模型 + 算声纹，然后必须再等 2 秒攒满第一个窗口，才出得了第一个字。
+**不是 bug，是 BSRNN 整窗分离的固有代价**——262 MB 权重加载（~5 秒）+ 首次推理预热（~1.4 秒）已在「连上服务之后」的空闲时段后台预加载并跑过一次 warmup，所以点「开始提取」时（无论首次还是中途换陌生人）都只剩：算注册声纹（~0.06 秒）+ 必须再等 1 秒攒满第一个窗口（延迟②）+ 首窗前向（~0.76 秒）+ ASR 尾部，才出得了第一个字。比最初的 2 秒整窗（~3 秒缓冲）已通过因果变体的 1 秒分块推理减半；剩下那 ~1 秒窗口累积是整窗分离算法的下限，无法靠预加载消除。
 
-要压低这个延迟，方向是算法层：把 2 秒整窗换成有状态分块 / 因果推理（SpEx+、SpeakerBeam 之类），或退到 `passthrough` / `speaker_gate` 模式（门控路径按帧处理，首字快很多，代价是不做真正的波形分离）。
+要继续压低这个延迟，方向是进一步缩短窗口（分离质量会下降），或换更轻的因果模型（SpEx+、SpeakerBeam 之类），或退到 `passthrough` / `speaker_gate` 模式（门控路径按帧处理，首字快很多，代价是不做真正的波形分离）。

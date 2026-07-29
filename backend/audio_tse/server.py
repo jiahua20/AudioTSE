@@ -9,7 +9,13 @@ from websockets.exceptions import ConnectionClosed
 from .asr import AsrModel, StreamingAsr
 from .session import AudioSession, SessionError, SessionState
 from .speaker_gate import SpeakerGate
-from .tse import CROSSFADE_SECONDS, WINDOW_SECONDS, BufferedWeSepTse, TseModel
+from .tse import (
+    CROSSFADE_SECONDS,
+    WINDOW_SECONDS,
+    BufferedWeSepTse,
+    TseModel,
+    WeSepTseEngine,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +61,7 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         {
             "id": "tse",
             "name": "纯音频 TSE（实验）",
-            "description": "WeSep BSRNN + 注册语音；约 3 秒缓冲，英语训练权重，中文效果待验证",
+            "description": "WeSep BSRNN + 注册语音；约 1.7 秒缓冲，英语训练权重，中文效果待验证",
             "available": TSE_MODEL.available,
             "reason": TSE_MODEL.unavailable_reason,
         },
@@ -75,12 +81,12 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     return asr_models, processors
 
 
-FRAME_MS = (2048 / 16_000) * 1000.0   # one WebSocket chunk == 128 ms of audio
-HOP_MS = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0  # one TSE hop == window minus crossfade
+FRAME_MS = (2048 / 16_000) * 1000.0   # 一个 WebSocket 数据块 == 128 ms 音频
+HOP_MS = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0  # 一次 TSE hop == 窗口减去交叉淡入淡出
 
 
 def rtf_for(processor: str, tse_ms: float, asr_ms: float, gate_ms: float) -> float | None:
-    """Real-Time Factor = processing time / audio time. < 1 means it keeps up with live audio."""
+    """Real-Time Factor（实时因子）= 处理时间 / 音频时间。小于 1 表示能跟上实时音频。"""
     if processor == "tse":
         return (tse_ms + asr_ms) / HOP_MS if (tse_ms or asr_ms) else None
     cost = gate_ms if processor == "speaker_gate" else asr_ms
@@ -102,6 +108,8 @@ def metrics_payload(rt: dict, tse, asr, processor: str) -> dict:
         "tseMs": round(tse_ms, 1) if tse and tse_ms else None,
         "asrMs": round(asr_ms, 1) if asr and asr_ms else None,
         "backlogSec": round(tse.buffered_seconds, 2) if tse else 0.0,
+        "droppedSec": round(tse.dropped_seconds, 2) if tse else 0.0,
+        "silentWindows": tse.silent_windows if tse else 0,
         "rtf": round(rtf, 3) if rtf is not None else None,
         "e2eFirstMs": round(e2e, 0) if e2e is not None else None,
     }
@@ -119,6 +127,51 @@ async def handle(websocket: ServerConnection) -> None:
     asr: StreamingAsr | None = None
     gate: SpeakerGate | None = None
     tse: BufferedWeSepTse | None = None
+    # 会话级共享引擎：BSRNN 权重（约 262 MB）只加载一次，之后换人 / 停止
+    # 再提取都复用，省掉每次 startExtraction 重新 load_model_local 的开销。
+    tse_engine: WeSepTseEngine | None = None
+    tse_engine_task: asyncio.Task[WeSepTseEngine] | None = None
+    bg_tasks: set[asyncio.Task] = set()
+
+    async def ensure_tse_engine() -> WeSepTseEngine:
+        """确保分离引擎已（或正在）加载并返回就绪实例。
+        连上后由 kick_tse_preload 后台预加载；startExtraction 时若还没好就等它收尾。"""
+        nonlocal tse_engine, tse_engine_task
+        if tse_engine is not None:
+            return tse_engine
+        if tse_engine_task is None:
+            tse_engine_task = asyncio.create_task(asyncio.to_thread(WeSepTseEngine, TSE_MODEL))
+        try:
+            tse_engine = await tse_engine_task
+        except Exception:
+            tse_engine_task = None  # 失败则允许下次重试
+            raise
+        return tse_engine
+
+    def kick_tse_preload() -> None:
+        """后台预加载分离引擎 + 预热一次前向，完成后通知前端启用「开始注册」。
+        幂等：引擎已加载则立即通知，正在加载则等它收尾。这样把权重加载那约 5 秒
+        从「点开始提取」挪到「连上服务 / 切到 TSE 之后」的空闲时段。"""
+        async def _run() -> None:
+            ready, reason = True, ""
+            try:
+                engine = await ensure_tse_engine()
+                try:
+                    await asyncio.to_thread(engine.warmup)  # 预热首次推理
+                except Exception:
+                    pass  # 预热失败不影响可用性，首次真实提取时再付那点代价
+            except Exception as error:
+                ready, reason = False, str(error)
+            try:
+                await send(websocket, "tseEngineReady", ready=ready,
+                           **({"reason": reason} if reason else {}))
+            except Exception:
+                pass  # 连接可能已断开
+
+        task = asyncio.create_task(_run())
+        bg_tasks.add(task)
+        task.add_done_callback(bg_tasks.discard)
+
     asr_models, processors = model_options()
     await send(
         websocket,
@@ -131,16 +184,23 @@ async def handle(websocket: ServerConnection) -> None:
         selectedAsr=selected_asr,
         selectedProcessor=selected_processor,
         message=(
-            "纯音频 TSE 已就绪（3 秒缓冲实验模式）"
+            "纯音频 TSE 正在后台加载分离模型（约 5 秒），完成后即可注册"
             if TSE_MODEL.available
             else f"纯音频 TSE 尚未就绪：{TSE_MODEL.unavailable_reason}；当前使用降级模式"
         ),
     )
+    # TSE 是主路径：连上就后台预加载分离引擎，让「开始注册」按钮在引擎就绪前
+    # 保持禁用。这样点「开始提取」时引擎已热，不再卡在权重加载那约 5 秒上。
+    if selected_processor == "tse":
+        kick_tse_preload()
     try:
         async for message in websocket:
             try:
                 if isinstance(message, bytes):
-                    session.accept_pcm16(message)
+                    try:
+                        session.accept_pcm16(message)
+                    except SessionError:
+                        pass  # idle/ready 期的音频帧:前端状态机无法与后端完美同步,静默丢弃而非刷 error
                     if session.state == SessionState.EXTRACTING:
                         rt["audio"] += len(message) / 32_000.0
                         text_emitted = False
@@ -152,11 +212,15 @@ async def handle(websocket: ServerConnection) -> None:
                                 text_emitted = text_emitted or bool(text)
                         elif gate:
                             g_start = time.perf_counter()
-                            for tr in await asyncio.to_thread(gate.accept_pcm16, message):
+                            events, audio_chunks = await asyncio.to_thread(gate.accept_pcm16, message)
+                            for pcm in audio_chunks:
+                                await websocket.send(pcm)
+                            for tr in events:
                                 await send(websocket, "transcript", **tr)
                                 text_emitted = text_emitted or bool(tr.get("text"))
                             rt["gate_ms"] = (time.perf_counter() - g_start) * 1000.0
                         elif asr:
+                            await websocket.send(message)  # 原音直通：回传原始帧供前端播放（听实时性）
                             text, final = await asyncio.to_thread(asr.accept_pcm16, message)
                             await send(websocket, "transcript", text=text, final=final)
                             text_emitted = text_emitted or bool(text)
@@ -196,6 +260,9 @@ async def handle(websocket: ServerConnection) -> None:
                         selectedProcessor=selected_processor,
                         bypassEnabled=selected_processor == "passthrough",
                     )
+                    # 切到 TSE 时也开始预加载（若之前没在跑）；引擎已加载则会立即通知就绪
+                    if requested_processor == "tse":
+                        kick_tse_preload()
                 elif command == "startExtraction":
                     model = ASR_MODELS[selected_asr]
                     if not model.available:
@@ -208,7 +275,13 @@ async def handle(websocket: ServerConnection) -> None:
                         gate.enroll_pcm16(bytes(session.enrollment))
                     elif selected_processor == "tse":
                         try:
-                            tse = BufferedWeSepTse(TSE_MODEL, bytes(session.enrollment))
+                            # 引擎连接级预加载（见 kick_tse_preload）；这里多半已就绪，
+                            # 万一还没好（注册特别快、加载还没跑完）就等它收尾。
+                            engine = await ensure_tse_engine()
+                            # 构造要算 ECAPA 注册嵌入(数秒),丢线程池避免阻塞事件循环
+                            # (否则 websocket ping 收不到回包、连接被超时掐断)
+                            tse = await asyncio.to_thread(
+                                BufferedWeSepTse, engine, bytes(session.enrollment), VAD_MODEL)
                         except Exception as error:
                             raise SessionError(f"WeSep TSE 加载失败：{error}") from error
                     session.start_extraction()
@@ -217,8 +290,8 @@ async def handle(websocket: ServerConnection) -> None:
                 elif command == "stopExtraction":
                     session.stop_extraction()
                     if tse and asr:
-                        # drain the partial TSE tail window (< 3s) so trailing
-                        # audio isn't dropped, then flush ASR trailing context
+                        # 排空 TSE 不足 1 秒的尾部窗口，使尾部音频不被
+                        # 丢弃，随后刷新 ASR 的尾部上下文
                         for target_pcm16 in await asyncio.to_thread(tse.flush):
                             await websocket.send(target_pcm16)
                             text, final = await asyncio.to_thread(asr.accept_pcm16, target_pcm16)
