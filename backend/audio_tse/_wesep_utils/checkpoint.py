@@ -1,3 +1,7 @@
+# [vendored] 上游 wesep/wespeaker 的 wesep.utils.checkpoint 副本（wheel 遗漏）。
+# 由 wesep_loader.py 在 import wesep 前注册为 wesep.utils.checkpoint。
+# 本项目实际只用 load_pretrained_model（加载 BSRNN 权重）；
+# load/save_checkpoint 是训练期的工具，推理路径不会走到。
 from typing import List, Optional
 
 import torch

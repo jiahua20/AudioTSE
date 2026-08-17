@@ -1,3 +1,8 @@
+# [vendored] 上游 WeSpeaker 的 wesep.utils.utils 副本（wheel 遗漏）。
+# 由 wesep_loader.py 注册为 wesep.utils.utils。
+# 提供 set_seed / parse_config_or_kwargs 等训练 CLI 工具函数；
+# 仅因 wesep 的模块导入链需要而存在，推理路径基本不执行其中的逻辑。
+# 代码保持与上游一致（Apache-2.0），未加逐行注释。
 # Copyright (c) 2022 Hongji Wang (jijijiang77@gmail.com)
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

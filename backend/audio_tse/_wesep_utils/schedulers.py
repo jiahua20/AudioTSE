@@ -1,3 +1,8 @@
+# [vendored] 上游 WeSpeaker 的 wesep.utils.schedulers 副本（wheel 遗漏）。
+# 由 wesep_loader.py 注册为 wesep.utils.schedulers。
+# checkpoint.py 导入其中的 BaseClass 类型注解；MarginScheduler /
+# ExponentialDecrease / TriAngular2 都是训练期学习率调度器，推理用不到。
+# 代码保持与上游一致（Apache-2.0），未加逐行注释。
 # Copyright (c) 2021 Shuai Wang (wsstriving@gmail.com)
 #               2021 Zhengyang Chen (chenzhengyang117@gmail.com)
 #               2022 Hongji Wang (jijijiang77@gmail.com)

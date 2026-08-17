@@ -1,3 +1,8 @@
+# 纯音频目标说话人提取（TSE）：WeSep BSRNN + ECAPA 的分块流式封装。
+# 两个类的分工：
+#   WeSepTseEngine  —— 与「提取哪个人」无关的重资源（262 MB 权重），连接级加载一次
+#   BufferedWeSepTse —— 与本次注册人相关的状态（注册嵌入 + OLA 缓冲 + VAD），
+#                        每次 startExtraction 新建
 from __future__ import annotations
 
 import importlib.util
@@ -36,16 +41,20 @@ VOICE_RATIO_THRESHOLD = 0.05
 
 @dataclass(frozen=True)
 class TseModel:
-    id: str
-    name: str
-    directory: Path
+    """TSE 模型的静态描述 + 可用性探测（文件齐没齐 / 依赖装没装）。"""
+
+    id: str           # 模型标识
+    name: str         # 展示名
+    directory: Path   # 权重目录（内含 config.yaml + avg_model.pt）
 
     @property
     def model_files_ready(self) -> bool:
+        # WeSep 权重的两个必需文件都在才算「文件就绪」
         return all((self.directory / filename).exists() for filename in ("config.yaml", "avg_model.pt"))
 
     @property
     def dependency_ready(self) -> bool:
+        # 还需要 CPU PyTorch 和 wesep 包（install-wesep-tse.ps1 单独安装）
         return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("wesep") is not None
 
     @property
@@ -54,6 +63,7 @@ class TseModel:
 
     @property
     def unavailable_reason(self) -> str | None:
+        # 不可用时给出具体缺什么 + 怎么装（前端展示用）
         if not self.model_files_ready:
             return "缺少 WeSep BSRNN 权重；运行 scripts/install-wesep-tse.ps1 安装"
         if not self.dependency_ready:
@@ -78,6 +88,7 @@ class WeSepTseEngine:
         if not model.available:
             raise RuntimeError(model.unavailable_reason or "WeSep TSE 不可用")
 
+        # 先打导入垫片（伪造 wesep.utils 包 + 可选依赖桩），否则 import wesep 直接失败
         from .wesep_loader import ensure_wesep_runtime
 
         ensure_wesep_runtime()
@@ -86,30 +97,33 @@ class WeSepTseEngine:
         from wesep import load_model_local
 
         self._torch = torch
-        self._torch.set_num_threads(os.cpu_count() or 4)
-        self._extractor = load_model_local(str(model.directory))
-        self._extractor.set_device("cpu")
-        self._extractor.set_resample_rate(SAMPLE_RATE)
-        self._extractor.set_vad(False)
+        self._torch.set_num_threads(os.cpu_count() or 4)  # CPU 推理吃满所有核
+        self._extractor = load_model_local(str(model.directory))  # 加载 config+权重（约 5 s）
+        self._extractor.set_device("cpu")          # 纯 CPU 部署
+        self._extractor.set_resample_rate(SAMPLE_RATE)  # 输入统一重采样到 16 k
+        self._extractor.set_vad(False)             # 关掉内置 VAD：静音门控由外层自己做
         # OLA 要求各窗口振幅保持一致；逐窗口归一化会使每个窗口的增益在
         # 拼接缝处跳变。限幅仅作为安全兜底。
         self._extractor.set_output_norm(False)
         self._device = self._extractor.device
 
-        self._window_samples = int(SAMPLE_RATE * WINDOW_SECONDS)
-        self._cf_samples = max(1, int(SAMPLE_RATE * CROSSFADE_SECONDS))
-        self._hop_samples = self._window_samples - self._cf_samples
+        # 由秒数换算出采样点数级别的常量，避免热路径上反复换算
+        self._window_samples = int(SAMPLE_RATE * WINDOW_SECONDS)    # 一个窗口的采样数（16000）
+        self._cf_samples = max(1, int(SAMPLE_RATE * CROSSFADE_SECONDS))  # 交叉淡入淡出的采样数（1600）
+        self._hop_samples = self._window_samples - self._cf_samples  # 每窗前进的步长（14400）
         # 线性斜坡分析/合成窗：在重叠区 ramp_up + ramp_down == 1，
         # 从而重叠相加可重构为单位增益。
         ramp = np.linspace(0.0, 1.0, self._cf_samples, endpoint=False, dtype=np.float32)
         win = np.ones(self._window_samples, dtype=np.float32)
-        win[: self._cf_samples] = ramp
-        win[-self._cf_samples:] = 1.0 - ramp
+        win[: self._cf_samples] = ramp          # 窗头：0 → 1 线性上升（淡入）
+        win[-self._cf_samples:] = 1.0 - ramp    # 窗尾：1 → 0 线性下降（淡出）
         self._synth_win = win
 
+        # 积压上限 = 一个窗口 + 容忍量；超过即判定 CPU 跟不上实时（见 _shed_backlog）
         self._max_buf_samples = self._window_samples + int(SAMPLE_RATE * BACKLOG_TOLERANCE_SECONDS)
 
     def _to_tensor(self, pcm16: bytes):
+        # PCM16 字节 → float32 归一数组 → [1, T] 张量（batch=1）
         samples = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
         return self._torch.from_numpy(samples).unsqueeze(0)
 
@@ -117,14 +131,16 @@ class WeSepTseEngine:
         """用注册语音算一次 ECAPA 说话人嵌入。换人时重算；因权重已在引擎里
         加载好，这里只剩一次 ECAPA 前向（很快）。"""
         torch = self._torch
-        model = self._extractor.model
+        model = self._extractor.model            # 底层 nn.Module（BSRNN+ECAPA）
         enroll = self._to_tensor(enrollment_pcm16).to(self._device)
+        # 提 fbank 特征并做 CMN（倒谱均值归一化），与训练时的输入一致
         feats = self._extractor.compute_fbank(enroll, sample_rate=SAMPLE_RATE, cmn=True)
-        feats = feats.unsqueeze(0).to(self._device)
-        with torch.no_grad():
-            tmp = model.spk_model(feats)
+        feats = feats.unsqueeze(0).to(self._device)  # [1, 1, T, F]：补 batch 维
+        with torch.no_grad():                    # 纯推理，不需要梯度
+            tmp = model.spk_model(feats)         # ECAPA 前向（可能返回 tuple，取最后一层）
             emb = tmp[-1] if isinstance(tmp, tuple) else tmp
-            spk_embedding = model.spk_transform(emb)
+            spk_embedding = model.spk_transform(emb)  # 线性变换到 BSRNN 期望的维度
+            # [B, D] → [B, D, 1, 1]：对齐 BSRNN separator 内部广播的形状
             spk_embedding = spk_embedding.unsqueeze(1).unsqueeze(3)
         return spk_embedding
 
@@ -133,58 +149,68 @@ class WeSepTseEngine:
         与 wesep.models.bsrnn.BSRNN.forward 的逻辑保持一致。"""
         torch = self._torch
         model = self._extractor.model
-        batch_size, nsample = wav_input.shape
-        nch = 1
-        win, stride = model.win, model.stride
+        batch_size, nsample = wav_input.shape  # [B=1, T]
+        nch = 1                                 # 单声道
+        win, stride = model.win, model.stride   # STFT 窗长/帧移（来自训练配置）
         window = torch.hann_window(win).to(wav_input.device).type(wav_input.type())
+        # 1) STFT：时域混合波形 → 复数频谱 [B, F, T']
         spec = torch.stft(wav_input, n_fft=win, hop_length=stride,
                           window=window, return_complex=True)
-        spec_RI = torch.stack([spec.real, spec.imag], 1)
+        spec_RI = torch.stack([spec.real, spec.imag], 1)  # [B, 2, F, T']：实部/虚部并成通道
         subband_spec, subband_mix_spec = [], []
         band_idx = 0
+        # 2) 按训练配置的频带划分，把全带谱切成若干子带（BSRNN 的 band-split 结构）
         for i in range(len(model.band_width)):
             bw = model.band_width[i]
-            subband_spec.append(spec_RI[:, :, band_idx:band_idx + bw].contiguous())
-            subband_mix_spec.append(spec[:, band_idx:band_idx + bw])
+            subband_spec.append(spec_RI[:, :, band_idx:band_idx + bw].contiguous())  # 实/虚子带
+            subband_mix_spec.append(spec[:, band_idx:band_idx + bw])                 # 复数子带
             band_idx += bw
         subband_feature = []
+        # 3) 每个子带做 BatchNorm（band-split 里常规的逐带归一化）
         for i, bn_func in enumerate(model.BN):
             bw = model.band_width[i]
             subband_feature.append(bn_func(subband_spec[i].view(batch_size * nch, bw * 2, -1)))
-        subband_feature = torch.stack(subband_feature, 1)
+        subband_feature = torch.stack(subband_feature, 1)  # [B, 带数, 带宽*2, T']
+        # 4) 分离网络：序列/双路径模块 + 注意力，用注册嵌入作条件，输出各带特征
         sep_output = model.separator(subband_feature, spk_embedding,
                                      torch.tensor(nch))
         sep_subband_spec = []
+        # 5) 逐带生成幅度/相位类掩码并作用到复数谱上（复数比值掩码 CRM）
         for i, mask_func in enumerate(model.mask):
             bw = model.band_width[i]
             this_output = mask_func(sep_output[:, i]).view(batch_size * nch, 2, 2, bw, -1)
+            # 两组输出过 sigmoid 相乘 ≈ 有界掩码：[:,0] 幅度门控、[:,1] 相位修正
             this_mask = this_output[:, 0] * torch.sigmoid(this_output[:, 1])
+            # CRM 乘法：分别估计目标谱的实部与虚部
             est_real = (subband_mix_spec[i].real * this_mask[:, 0]
                         - subband_mix_spec[i].imag * this_mask[:, 1])
             est_imag = (subband_mix_spec[i].real * this_mask[:, 1]
                         + subband_mix_spec[i].imag * this_mask[:, 0])
             sep_subband_spec.append(torch.complex(est_real, est_imag))
-        est_spec = torch.cat(sep_subband_spec, 1)
+        est_spec = torch.cat(sep_subband_spec, 1)  # 拼回全带复数谱 [B, F, T']
+        # 6) ISTFT：估计谱 → 目标说话人的时域波形，长度对齐输入
         output = torch.istft(est_spec.view(batch_size * nch, model.enc_dim, -1),
                              n_fft=win, hop_length=stride, window=window, length=nsample)
-        s = output.view(batch_size, nch, -1).squeeze(dim=1)
+        s = output.view(batch_size, nch, -1).squeeze(dim=1)  # [B, T]
         if self._extractor.output_norm:
+            # 兜底限幅（本工程已关闭 output_norm，正常不会走到）
             s = s / s.abs().max(dim=1, keepdim=True).values * 0.9
         return s
 
     def extract_float(self, samples: np.ndarray, spk_embedding) -> np.ndarray:
+        """单窗分离：float32 波形 [T] + 缓存的注册嵌入 → 目标波形 [T]。"""
         wav = self._torch.from_numpy(
             np.ascontiguousarray(samples, dtype=np.float32)
-        ).unsqueeze(0).to(self._device)
-        with self._torch.no_grad():
+        ).unsqueeze(0).to(self._device)  # [1, T] 张量
+        with self._torch.no_grad():      # 推理模式
             s = self._forward_cached(wav, spk_embedding)
-        return s.detach().cpu().numpy().reshape(-1)
+        return s.detach().cpu().numpy().reshape(-1)  # 回 numpy 一维数组
 
     def warmup(self) -> None:
         """跑一次端到端空转（ECAPA 注册嵌入 + 单窗 BSRNN 前向），触发 PyTorch 的
         惰性内存分配与内核选择，使首次真实提取不再额外卡那约 0.5–1 秒的首次推理。
         在连接级预加载阶段调用；输入输出均为静音，结果丢弃。"""
-        silence_pcm16 = np.zeros(self._window_samples * 3, dtype="<i2").tobytes()
+        silence_pcm16 = np.zeros(self._window_samples * 3, dtype="<i2").tobytes()  # 3 s 静音
         embedding = self.compute_enroll_embedding(silence_pcm16)
         self.extract_float(np.zeros(self._window_samples, dtype=np.float32), embedding)
 
@@ -205,18 +231,19 @@ class BufferedWeSepTse:
     def __init__(self, engine: WeSepTseEngine, enrollment_pcm16: bytes,
                  vad_model: Path | None = None) -> None:
         self._engine = engine
+        # 注册语音 → ECAPA 嵌入，算一次后整个提取过程复用（不随窗口变）
         self._cached_spk_embedding = engine.compute_enroll_embedding(enrollment_pcm16)
-        self._in_buf = np.array([], dtype=np.float32)
-        self._out_overlap = np.array([], dtype=np.float32)
+        self._in_buf = np.array([], dtype=np.float32)     # 输入 FIFO：凑满一个窗口就分离
+        self._out_overlap = np.array([], dtype=np.float32)  # 输出重叠缓冲：存放相邻窗淡入淡出的重叠区
         # VAD 门控：逐帧语音标志，与 _in_buf 一一对应，使窗口可被判定为
         # 静音（无语音）从而旁路 BSRNN 前向推理。每次提取新建（检测器有
         # 内部缓冲状态，不能跨注册人复用）；模型缺失时为 None——此时每个
         # 窗口都走前向（安全默认）。
         self._vad = self._create_vad(vad_model)
-        self._buf_voice = np.array([], dtype=np.bool_)
-        self.last_extract_ms = 0.0
-        self.dropped_seconds = 0.0
-        self.silent_windows = 0
+        self._buf_voice = np.array([], dtype=np.bool_)    # 与 _in_buf 对齐的逐帧「有语音」标志
+        self.last_extract_ms = 0.0   # 最近一次单窗分离耗时（metrics 展示）
+        self.dropped_seconds = 0.0   # 积压丢弃的累计秒数（metrics 展示）
+        self.silent_windows = 0      # 静音直通跳过的窗口数（metrics 展示）
 
     # 引擎上与注册人无关的常量的代理，使下面的流式逻辑保持简洁。
     @property
@@ -249,37 +276,47 @@ class BufferedWeSepTse:
             import sherpa_onnx
             config = sherpa_onnx.VadModelConfig()
             config.silero_vad.model = str(vad_model)
-            config.silero_vad.threshold = 0.5
-            config.silero_vad.min_silence_duration = 0.25
-            config.silero_vad.min_speech_duration = 0.1
-            config.silero_vad.max_speech_duration = 20.0
+            config.silero_vad.threshold = 0.5              # 语音概率阈值
+            config.silero_vad.min_silence_duration = 0.25  # 判定「说完」所需的最短静音
+            config.silero_vad.min_speech_duration = 0.1    # 短于此的语音脉冲忽略
+            config.silero_vad.max_speech_duration = 20.0   # 强制切段的最长连续语音
             config.sample_rate = SAMPLE_RATE
             config.provider = "cpu"
-            config.num_threads = 1
+            config.num_threads = 1                         # VAD 很轻，单线程足够
+            # 30 s 环形缓冲：足够容纳最长的连续语音段
             return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
         except Exception:
-            return None
+            return None  # VAD 只是优化项，缺了就全走 BSRNN（结果更准只是更费 CPU）
 
     @property
     def buffered_seconds(self) -> float:
+        # 当前还在缓冲里的音频量（输入 FIFO + 输出重叠区），反映端到端积压
         return (len(self._in_buf) + len(self._out_overlap)) / SAMPLE_RATE
 
     @staticmethod
     def _to_pcm16(samples: np.ndarray) -> bytes:
+        # float32 → PCM16 字节。先清洗 NaN/Inf（模型偶发数值问题的兜底），
+        # 再裁剪到 [-1,1] 防止溢出翻转
         samples = np.nan_to_num(samples, nan=0.0, posinf=1.0, neginf=-1.0)
         return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
     def _ola_add(self, seg: np.ndarray) -> None:
+        """把一个已乘合成窗的输出段累加进重叠缓冲（overlap-add 的 add 半步）。"""
         n = len(seg)
         if len(self._out_overlap) < n:
+            # 缓冲不够长则补零扩展（首次调用时为空）
             self._out_overlap = np.concatenate(
                 [self._out_overlap, np.zeros(n - len(self._out_overlap), dtype=np.float32)]
             )
-        self._out_overlap[:n] += seg
+        self._out_overlap[:n] += seg  # 重叠区自然叠加：前一窗的淡出 + 本窗的淡入
 
     def _ola_take(self, hop: int) -> np.ndarray:
+        """从重叠缓冲头部取走 hop 个采样（overlap-add 的 take 半步）。
+
+        头部 hop 个采样已不会再被后续窗口影响（后续窗的淡入区在更后面），
+        所以可以直接出队交给 ASR/播放。"""
         ready = self._out_overlap[:hop].copy()
-        self._out_overlap = self._out_overlap[hop:]
+        self._out_overlap = self._out_overlap[hop:]  # 移除已出队部分
         return ready
 
     def _shed_backlog(self) -> None:
@@ -287,31 +324,35 @@ class BufferedWeSepTse:
         CPU 已跟不上实时。只保留最新窗口以使延迟有界；被跳过的中间音频不会被
         转写。在正常负载下为无操作。"""
         if len(self._in_buf) <= self._max_buf_samples:
-            return
-        drop = len(self._in_buf) - self._window_samples
+            return  # 未超限：正常路径
+        drop = len(self._in_buf) - self._window_samples  # 只留最新一个窗口
         self._in_buf = self._in_buf[drop:]
-        self._buf_voice = self._buf_voice[drop:]
-        self.dropped_seconds += drop / SAMPLE_RATE
+        self._buf_voice = self._buf_voice[drop:]         # 语音标志同步裁剪，保持对齐
+        self.dropped_seconds += drop / SAMPLE_RATE       # 累计丢弃量（前端可见）
 
     def accept_pcm16(self, chunk: bytes) -> list[bytes]:
+        """喂入一帧 PCM16；凑满窗口时分批返回分离后的 PCM16 块列表。
+
+        这是热路径：前端每 128 ms 一帧，这里每凑满 0.9 s hop 输出一块。"""
         samples = np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0
-        self._in_buf = np.concatenate([self._in_buf, samples])
+        self._in_buf = np.concatenate([self._in_buf, samples])  # 追加进输入 FIFO
         # 本数据块的语音活动标志，与 _in_buf 一一对应，使每个窗口可按其
         # 窗内语音占比进行分类。
         if self._vad is not None:
             self._vad.accept_waveform(np.ascontiguousarray(samples, dtype=np.float32))
-            voice = bool(self._vad.is_speech_detected())
+            voice = bool(self._vad.is_speech_detected())  # 当前时刻检测器是否处于语音段
         else:
-            voice = True
+            voice = True  # 无 VAD：保守地全按有语音处理
         self._buf_voice = np.concatenate(
             [self._buf_voice, np.full(len(samples), voice, dtype=np.bool_)]
         )
-        self._shed_backlog()
+        self._shed_backlog()  # 先检查是否需要丢帧保实时
         outputs: list[bytes] = []
         while len(self._in_buf) >= self._window_samples:
+            # 取出最前面的一个完整窗口（不动缓冲，切视图）
             window = self._in_buf[: self._window_samples]
             voice_ratio = (
-                float(np.mean(self._buf_voice[: self._window_samples]))
+                float(np.mean(self._buf_voice[: self._window_samples]))  # 窗内有语音帧的占比
                 if self._vad is not None else 1.0
             )
             if voice_ratio < VOICE_RATIO_THRESHOLD:
@@ -321,13 +362,14 @@ class BufferedWeSepTse:
                 self.silent_windows += 1
                 seg = window * self._synth_win
             else:
+                # 有语音窗口：BSRNN 单窗分离（注入缓存的注册嵌入），计时供 metrics
                 start = time.perf_counter()
                 seg = self._engine.extract_float(window, self._cached_spk_embedding) * self._synth_win
                 self.last_extract_ms = (time.perf_counter() - start) * 1000.0
-            self._ola_add(seg)
-            outputs.append(self._to_pcm16(self._ola_take(self._hop_samples)))
-            self._in_buf = self._in_buf[self._hop_samples:]
-            self._buf_voice = self._buf_voice[self._hop_samples:]
+            self._ola_add(seg)                                    # 累加进重叠缓冲
+            outputs.append(self._to_pcm16(self._ola_take(self._hop_samples)))  # 出队一块
+            self._in_buf = self._in_buf[self._hop_samples:]       # 输入 FIFO 前进一个 hop
+            self._buf_voice = self._buf_voice[self._hop_samples:]  # 语音标志同步前进
         return outputs
 
     def flush(self) -> list[bytes]:
@@ -336,8 +378,11 @@ class BufferedWeSepTse:
         outputs: list[bytes] = []
         tail_len = len(self._in_buf)
         take = len(self._out_overlap)  # 无新数据 -> 输出已暂存的重叠（淡出）
+        # 尾部太短（<0.3 s 且不足窗长）时不足以再做一次有意义的分离，
+        # 只把已暂存的重叠发出去
         if tail_len >= int(SAMPLE_RATE * 2 * 0.3):
             n = min(tail_len, self._window_samples)
+            # 把尾部补零到完整窗口长度再分离（BSRNN 需要固定窗长）
             window = np.zeros(self._window_samples, dtype=np.float32)
             window[:n] = self._in_buf[:n]
             start = time.perf_counter()
@@ -346,6 +391,7 @@ class BufferedWeSepTse:
             self.last_extract_ms = (time.perf_counter() - start) * 1000.0
             # 真实音频占据 out_overlap[0:max(cf, n)]；其后为补零部分
             take = min(len(self._out_overlap), max(self._cf_samples, n))
+        # 清空本次提取的全部缓冲（对象整体丢弃，这里只是保持状态一致）
         self._in_buf = np.array([], dtype=np.float32)
         self._buf_voice = np.array([], dtype=np.bool_)
         if take > 0:

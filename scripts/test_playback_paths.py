@@ -3,6 +3,8 @@
 依次切到 passthrough / speaker_gate / tse，各灌 8s mixed.wav，确认每种模式
 都收到二进制音频帧（+ 转写）。passthrough 应近乎全量回传；门控只回传接受段；
 TSE 回传分离音频。
+
+用法：先启动后端（python -m audio_tse.server），再运行本脚本。
 """
 import asyncio
 import json
@@ -13,17 +15,19 @@ from pathlib import Path
 import websockets
 
 URI = "ws://127.0.0.1:8765"
-FRAME = 4096
-SAMPLES = Path("samples")
+FRAME = 4096              # 每帧字节 = 2048 采样 = 128 ms，与前端一致
+SAMPLES = Path("samples") # 测试音频目录
 
 
 def load_pcm16(name: str) -> bytes:
+    # 读 16 kHz 单声道 PCM16 wav → 原始字节
     w = wave.open(str(SAMPLES / name), "rb")
     data = w.readframes(w.getnframes()); w.close()
     return data
 
 
 async def drain_to_state(q, want, timeout=90):
+    # 消费队列直到出现目标状态；期间忽略音频块，顺带监控引擎加载失败
     deadline = time.perf_counter() + timeout
     while time.perf_counter() < deadline:
         raw = await asyncio.wait_for(q.get(), timeout=deadline - time.perf_counter())
@@ -31,7 +35,7 @@ async def drain_to_state(q, want, timeout=90):
             continue
         ev = json.loads(raw)
         if ev.get("event") == "tseEngineReady" and not ev.get("ready"):
-            raise RuntimeError("引擎加载失败")
+            raise RuntimeError("引擎加载失败")  # TSE 权重没就绪，继续等也没意义
         if ev.get("state") == want:
             return ev
     raise TimeoutError(f"等不到 state={want}")
@@ -64,9 +68,9 @@ async def run_processor(ws, q, processor: str, mix: bytes) -> None:
     n_sent = n_recv = bytes_recv = n_text = 0
     t0 = time.perf_counter()
     for i in range(0, len(mix), FRAME):
-        await ws.send(mix[i:i + FRAME])
+        await ws.send(mix[i:i + FRAME])     # 发一帧
         n_sent += 1
-        while not q.empty():
+        while not q.empty():                # 抽干回传：音频块计数 + 转写计数
             raw = q.get_nowait()
             if isinstance(raw, bytes):
                 n_recv += 1; bytes_recv += len(raw)
@@ -74,11 +78,12 @@ async def run_processor(ws, q, processor: str, mix: bytes) -> None:
                 ev = json.loads(raw)
                 if ev.get("event") == "transcript" and ev.get("text"):
                     n_text += 1
+        # 按真实速率节流（128 ms/帧）
         await asyncio.sleep(max(0.0, 0.12 * n_sent - (time.perf_counter() - t0)))
-    await asyncio.sleep(2.0)
-    await ws.send(json.dumps({"command": "stopExtraction"}))
+    await asyncio.sleep(2.0)                # 等尾部窗口
+    await ws.send(json.dumps({"command": "stopExtraction"}))  # flush 尾部
     await asyncio.sleep(0.8)
-    while not q.empty():
+    while not q.empty():                    # 收尾：把 flush 出的尾部音频也算上
         raw = q.get_nowait()
         if isinstance(raw, bytes):
             n_recv += 1; bytes_recv += len(raw)
@@ -88,17 +93,18 @@ async def run_processor(ws, q, processor: str, mix: bytes) -> None:
                 n_text += 1
 
     print(f"  [{processor:13s}] 发 {n_sent} 帧 | 收 {n_recv} 个音频块 / {bytes_recv/32000:.2f}s | 转写 {n_text} 条")
-    assert n_recv > 0, f"{processor} 没收到任何音频！"
+    assert n_recv > 0, f"{processor} 没收到任何音频！"  # 核心断言：必须回传可播放音频
     print(f"   [OK] {processor} 有可播放音频")
 
 
 async def main() -> None:
-    enroll = load_pcm16("enroll_target.wav")
-    mix = load_pcm16("mixed.wav")
+    enroll = load_pcm16("enroll_target.wav")  # 注册音频
+    mix = load_pcm16("mixed.wav")             # 混合音频
     async with websockets.connect(URI, max_size=2**20) as ws:
         q: asyncio.Queue = asyncio.Queue()
 
         async def reader():
+            # 后台搬运：所有服务端消息 → 队列
             try:
                 async for raw in ws:
                     q.put_nowait(raw)
@@ -109,6 +115,7 @@ async def main() -> None:
         hello = json.loads(await q.get())
         print("hello:", hello.get("selectedProcessor"))
 
+        # 先注册一次（三种模式共用同一段注册声纹）
         await ws.send(json.dumps({"command": "startEnrollment"}))
         await drain_to_state(q, "enrolling")
         for i in range(0, len(enroll), FRAME):

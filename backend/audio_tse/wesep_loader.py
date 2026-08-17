@@ -31,6 +31,7 @@ import sys
 import types
 from pathlib import Path
 
+# 随包发布的 wesep.utils 替身文件所在目录（checkpoint/schedulers/utils 三个 .py）
 _VENDOR = Path(__file__).resolve().parent / "_wesep_utils"
 
 # 在 ``--no-deps`` 安装下确实无法导入（已在一个干净的 wesep+wespeaker 安装中
@@ -61,11 +62,11 @@ _OPTIONAL_STUBS: dict[str, dict[str, object]] = {
 def _seed_stub(dotted: str, attrs: dict[str, object]) -> None:
     """在 ``dotted`` 名下注册一个惰性模块；若该模块已加载则跳过。"""
     if sys.modules.get(dotted) is not None:
-        return
-    mod = types.ModuleType(dotted)
+        return  # 已有（真模块或已种下的桩）：不动
+    mod = types.ModuleType(dotted)      # 造一个空模块对象
     for key, value in attrs.items():
-        setattr(mod, key, value)
-    sys.modules[dotted] = mod
+        setattr(mod, key, value)        # 按 _OPTIONAL_STUBS 的表暴露占位属性
+    sys.modules[dotted] = mod           # 注册进 import 系统：此后 import 直接命中它
 
 
 def _install_vendored_utils() -> None:
@@ -80,26 +81,30 @@ def _install_vendored_utils() -> None:
     if sys.modules.get("wesep.utils.utils") is not None:
         return  # 已安装——幂等
 
+    # 1) 伪造包对象 wesep.utils，并给它真实的 __path__（指向 _VENDOR 目录），
+    #    使 Python 把它当作一个「包」而不是普通模块
     pkg = types.ModuleType("wesep.utils")
     pkg.__path__ = [str(_VENDOR)]  # marks it as a package
     pkg.__package__ = "wesep.utils"
     sys.modules["wesep.utils"] = pkg
 
+    # 2) 逐个加载并注册三个子模块（schedulers / utils / checkpoint）。
     # 先装 schedulers/utils：checkpoint.py 在导入时会执行
     # ``from wesep.utils.schedulers import BaseClass``。
     for name in ("schedulers", "utils", "checkpoint"):
         dotted = f"wesep.utils.{name}"
+        # 用文件路径直接构造模块规格（绕过常规的 sys.path 查找）
         spec = importlib.util.spec_from_file_location(dotted, _VENDOR / f"{name}.py")
         if spec is None or spec.loader is None:
             raise ImportError(f"cannot load vendored module {dotted}")
         mod = importlib.util.module_from_spec(spec)
-        sys.modules[dotted] = mod
-        setattr(pkg, name, mod)
-        spec.loader.exec_module(mod)
+        sys.modules[dotted] = mod      # 先注册再执行（供模块内互相导入命中）
+        setattr(pkg, name, mod)        # 同时挂到包对象属性上（from 包 import 名 时用）
+        spec.loader.exec_module(mod)   # 真正执行模块体
 
 
 def ensure_wesep_runtime() -> None:
     """让 ``import wesep`` 在干净的安装下成功执行。幂等。"""
-    _install_vendored_utils()
+    _install_vendored_utils()          # 第一步：补上 wheel 遗漏的 wesep.utils
     for dotted, attrs in _OPTIONAL_STUBS.items():
-        _seed_stub(dotted, attrs)
+        _seed_stub(dotted, attrs)      # 第二步：给拉入重依赖的可选模块打桩
