@@ -1,0 +1,24 @@
+{
+  "name": "@audiotse/gate",
+  "version": "0.1.0",
+  "description": "AudioTSE 声纹门控 SDK（TS）：silero VAD 切段 + 3D-Speaker ER2Net 声纹相似度门控",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "validate": "tsx test/validate-embedding.ts",
+    "test": "tsx test/gate-e2e.ts"
+  },
+  "engines": {
+    "node": ">=18.20"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.20.1",
+    "sherpa-onnx": "^1.13.7"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.6.2"
+  }
+}

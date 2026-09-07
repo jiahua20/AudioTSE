@@ -1,0 +1,8 @@
+{
+  "name": "audiotse-sdk",
+  "private": true,
+  "workspaces": [
+    "web",
+    "electron-demo"
+  ]
+}
