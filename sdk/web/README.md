@@ -46,16 +46,37 @@ const out = await filter.filter(samples)     // 目标语音原样返回，非�
 - 注册语音 <1.5s 时实际阈值自动降为 `threshold × 0.7`（短注册相似度整体下移，
   不补偿会误拒；`filter.effectiveThreshold` 读当前生效值）。
 
-Electron 主进程接入示例见 [`examples/electron-main.example.js`](examples/electron-main.example.js)。
+Electron 主进程接入示例见 [`examples/electron-main.example.js`](examples/electron-main.example.js)；
+完整可跑的流程演示（纯 Node，不依赖 Electron）见
+[`examples/intranet-wake-flow.js`](examples/intranet-wake-flow.js)——在 `sdk/web` 下
+`node examples/intranet-wake-flow.js` 即可复现。
+
+### 唤醒词模式（内网典型接入）
+
+客户喊唤醒词（如「小耘小耘」）唤醒大屏：**这句唤醒语音同时做注册**，每次唤醒都
+重新调用一次 `enroll`（注册声纹随唤醒人刷新）；唤醒之后的提问只走
+`judge/filter`，不再注册。唤醒词四个音节 ≈1s，正好落在短注册安全区（<1.5s 自动
+阈值补偿生效，实测同人相似度 0.35~0.51、陌生人 ~0，注意 1s 注册下同人相似度余量
+较薄，若现场实测偶发误拒可把 `shortEnrollThresholdFactor` 从 0.7 再调低，或让唤醒
+词多一个音节）。
 
 ### 内网交付清单
 
-内网离线，需要带齐以下三样（其余都是开发/测试资产，不用带）：
+一键打包（推荐）：
+
+```powershell
+powershell -File sdk\web\script\package-intranet.ps1             # 全平台二进制（zip ~140 MB）
+powershell -File sdk\web\script\package-intranet.ps1 -WinOnly   # 只留 Windows x64（zip ~40 MB）
+```
+
+产出 `sdk/web/script/out/audiotse-intranet-<时间戳>.zip`，内含 SDK 产物、
+node_modules 运行时闭包、38 MB 声纹模型、样例音频和离线自检脚本
+（解压后 `node smoke-test.js` 验证环境）。手动清点的话需要：
 
 | 内容 | 位置 | 大小 |
 |---|---|---|
 | SDK 产物 | `dist/core/` + `package.json` | ~20 KB |
-| 推理运行时 | `node_modules/onnxruntime-node/`（联网环境 npm 装好拷过去；只要 Windows 可删 `bin/napi-v6/` 下 linux/darwin 目录） | ~284 MB（裁剪后 ~40 MB） |
+| 推理运行时 | `node_modules/onnxruntime-node/` 及其传递依赖（脚本按闭包自动收集） | ~284 MB（裁剪后 ~40 MB） |
 | 声纹模型 | `app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx` | 38 MB |
 
 目录摆法（示例）：
@@ -150,5 +171,5 @@ src/full/   vad.ts / speaker-gate.ts（组合 core 的 VoiceFilter + VAD 切段 
 src/index.ts 包主入口 = full；'@audiotse/gate/core' 子路径入口 = src/core
 test/core/  core 端到端（自带极简 wav 读取，不依赖 sherpa）
 test/full/  对拍验证 + 完整版端到端 + Python 参考生成工具
-examples/   内网 Electron 主进程接入示例
+examples/   intranet-wake-flow.js（唤醒词注册+提问过滤可跑演示）、electron-main.example.js（Electron 接入示例）
 ```

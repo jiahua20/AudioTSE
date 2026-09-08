@@ -38,6 +38,9 @@ models/
 # Large source clips fetched by scripts/make-test-audio-zh.py (regenerated on demand)
 samples/_raw/
 
+# 内网交付打包产物
+sdk/web/script/out/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
