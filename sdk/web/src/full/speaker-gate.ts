@@ -1,17 +1,13 @@
-// 声纹门控 SDK 主类：VAD 切段 → 每段声纹 → 与注册声纹比余弦相似度 → 达标放行。
+// 声纹门控完整版：VAD 切段 + 声纹判定。声纹注册/比对/短注册阈值补偿全部复用
+// 同包 ../core 的 VoiceFilter，本类只负责「VAD 切段 → 逐段喂给 VoiceFilter」
+// 以及注册音频的静音剥离。
 // 与 app 后端 speaker_gate.py 同一套模型和判定语义；区别是 v0 按段整段判定
 // （app 另有段内 0.6s 预热的增量判定和接受前缀补发，属于 ASR 联动的实时性优化，
 // SDK 后续版本再做）。
-//
-// 注册支持短语音：内部用独立 VAD 剥掉静音、只累计净语音，达到目标时长自动完成
-// （beginEnroll/enrollChunk/finishEnroll 流式用法，或 enroll() 批式便捷入口）。
-import { SpeakerEmbedder } from './embedder'
+import { VoiceFilter, type EnrollResult } from '../core/voice-filter'
 import { createSileroVad, type SileroVadOptions, type Vad } from './vad'
 
 export const SAMPLE_RATE = 16000
-
-/** 净语音低于该秒数时启用短注册阈值补偿 */
-const SHORT_ENROLL_BOUNDARY_SECONDS = 1.5
 
 export interface SpeakerGateConfig {
   /** silero_vad.onnx 路径 */
@@ -27,12 +23,7 @@ export interface SpeakerGateConfig {
   enrollTargetSpeechSeconds?: number
   /** 注册允许的最少净语音（秒），不足则 finishEnroll 抛错。默认 0.6 */
   enrollMinSpeechSeconds?: number
-  /**
-   * 短注册阈值补偿系数：净语音 < 1.5s 时实际阈值 = threshold × 该系数。
-   * 短注册的目标段相似度整体下移（实测 1s 注册下限 ~0.48，5s 注册 ~0.59），
-   * 阈值不降会误拒贴线目标段；0.5×0.7=0.35 时目标（≥0.48）与陌生人（~0）两侧
-   * 余量均 ≥0.13。设为 1 可禁用自适应。
-   */
+  /** 短注册阈值补偿系数（透传给 VoiceFilter），默认 0.7，设 1 禁用 */
   shortEnrollThresholdFactor?: number
   /** VAD 参数覆盖，默认同 app 后端（同时作用于主 VAD 与注册 VAD） */
   vad?: Partial<SileroVadOptions>
@@ -57,23 +48,7 @@ export interface EnrollProgress {
   enough: boolean
 }
 
-/** 注册结果。 */
-export interface EnrollResult {
-  /** 实际用于声纹的净语音时长（秒） */
-  speechSeconds: number
-}
-
-/** 两个向量的余弦相似度（与 app 后端 SpeakerEmbedder.cosine 同实现）。 */
-export function cosine(left: Float32Array, right: Float32Array): number {
-  let dot = 0, ln = 0, rn = 0
-  for (let i = 0; i < left.length; i++) {
-    dot += left[i] * right[i]
-    ln += left[i] * left[i]
-    rn += right[i] * right[i]
-  }
-  const denominator = Math.sqrt(ln) * Math.sqrt(rn)
-  return denominator > 1e-8 ? dot / denominator : 0.0
-}
+export type { EnrollResult }
 
 function concatFloat32(parts: Float32Array[]): Float32Array {
   const total = parts.reduce((n, p) => n + p.length, 0)
@@ -90,55 +65,52 @@ export class SpeakerGate {
   private constructor(
     /** 放行所需的相似度阈值基准 */
     readonly threshold: number,
-    private readonly shortEnrollFactor: number,
     private readonly vadModelPath: string,
     private readonly vadOverrides: Partial<SileroVadOptions>,
     private readonly enrollTarget: number,
     private readonly enrollMin: number,
     private readonly vad: Vad,
-    private readonly embedder: SpeakerEmbedder,
-    private enrollment: Float32Array | null,
+    private readonly filter: VoiceFilter,
     private enrollVad: Vad | null,
     private enrollChunks: Float32Array[],
     private enrollSpeechSamples: number,
-    private activeThreshold: number,
   ) {}
-
-  /** 当前实际生效的放行阈值（短注册补偿后，未注册时等于基准阈值）。 */
-  get effectiveThreshold(): number {
-    return this.activeThreshold
-  }
 
   static async create(config: SpeakerGateConfig): Promise<SpeakerGate> {
     const vad = createSileroVad(config.vadModel, config.vad)
-    const embedder = await SpeakerEmbedder.create(config.speakerModel)
-    const threshold = config.threshold ?? 0.5
+    const filter = await VoiceFilter.create({
+      speakerModel: config.speakerModel,
+      threshold: config.threshold,
+      shortEnrollThresholdFactor: config.shortEnrollThresholdFactor,
+    })
     return new SpeakerGate(
-      threshold,
-      config.shortEnrollThresholdFactor ?? 0.7,
+      config.threshold ?? 0.5,
       config.vadModel,
       config.vad ?? {},
       config.enrollTargetSpeechSeconds ?? 1.2,
       config.enrollMinSpeechSeconds ?? 0.6,
       vad,
-      embedder,
-      null,
+      filter,
       null,
       [],
       0,
-      threshold,
     )
   }
 
   /** 是否已有注册声纹（未注册时所有段放行）。 */
   get enrolled(): boolean {
-    return this.enrollment !== null
+    return this.filter.enrolled
+  }
+
+  /** 当前实际生效的放行阈值（短注册补偿后）。 */
+  get effectiveThreshold(): number {
+    return this.filter.effectiveThreshold
   }
 
   // ── 批式注册（一次性给整段音频）────────────────────────────
   /**
    * 便捷注册：整段音频内部剥静音后提声纹（静音不参与特征统计，短注册更稳）。
-   * 返回实际使用的净语音时长；未检测到语音时抛错。
+   * 返回实际使用的净语音时长；未检测到足够语音时抛错。
    */
   async enroll(samples: Float32Array): Promise<EnrollResult> {
     this.beginEnroll()
@@ -162,12 +134,7 @@ export class SpeakerGate {
   async enrollChunk(samples: Float32Array): Promise<EnrollProgress> {
     if (!this.enrollVad) this.beginEnroll()
     this.enrollVad!.acceptWaveform(samples)
-    while (!this.enrollVad!.isEmpty()) {
-      const segment = this.enrollVad!.front()
-      this.enrollVad!.pop()
-      this.enrollChunks.push(segment.samples)
-      this.enrollSpeechSamples += segment.samples.length
-    }
+    this.collectEnrollSegments()
     const speechSeconds = this.enrollSpeechSamples / SAMPLE_RATE
     return { speechSeconds, enough: speechSeconds >= this.enrollTarget }
   }
@@ -179,29 +146,15 @@ export class SpeakerGate {
   async finishEnroll(): Promise<EnrollResult> {
     if (!this.enrollVad) throw new Error('注册未开始（先 beginEnroll）')
     this.enrollVad.flush()
-    while (!this.enrollVad.isEmpty()) {
-      const segment = this.enrollVad.front()
-      this.enrollVad.pop()
-      this.enrollChunks.push(segment.samples)
-      this.enrollSpeechSamples += segment.samples.length
-    }
+    this.collectEnrollSegments()
     this.enrollVad.free()
     this.enrollVad = null
     const speechSeconds = this.enrollSpeechSamples / SAMPLE_RATE
     if (speechSeconds < this.enrollMin) {
       throw new Error(`净语音不足：${speechSeconds.toFixed(2)}s < ${this.enrollMin}s，请再说一句`)
     }
-    const embedding = await this.embedder.embed(concatFloat32(this.enrollChunks))
-    let norm = 0
-    for (const v of embedding) norm += v * v
-    norm = Math.sqrt(norm) + 1e-8
-    const normalized = new Float32Array(embedding.length)
-    for (let i = 0; i < embedding.length; i++) normalized[i] = embedding[i] / norm
-    this.enrollment = normalized
-    // 短注册补偿：净语音不足时目标段相似度整体下移，阈值按系数同步下调
-    this.activeThreshold =
-      speechSeconds < SHORT_ENROLL_BOUNDARY_SECONDS ? this.threshold * this.shortEnrollFactor : this.threshold
-    return { speechSeconds }
+    // VoiceFilter.enroll 负责声纹提取与短注册阈值补偿（输入已是剥好静音的纯语音）
+    return this.filter.enroll(concatFloat32(this.enrollChunks))
   }
 
   /** 喂入一段流式音频，返回自此完结的语音段及其门控判定。 */
@@ -227,23 +180,27 @@ export class SpeakerGate {
     this.enrollVad = null
   }
 
+  private collectEnrollSegments(): void {
+    while (!this.enrollVad!.isEmpty()) {
+      const segment = this.enrollVad!.front()
+      this.enrollVad!.pop()
+      this.enrollChunks.push(segment.samples)
+      this.enrollSpeechSamples += segment.samples.length
+    }
+  }
+
   private async drain(): Promise<GateSegmentEvent[]> {
     const events: GateSegmentEvent[] = []
     while (!this.vad.isEmpty()) {
       const segment = this.vad.front()
       this.vad.pop()
-      let similarity: number | null = null
-      let accepted = true
-      if (this.enrollment !== null) {
-        similarity = cosine(await this.embedder.embed(segment.samples), this.enrollment)
-        accepted = similarity >= this.activeThreshold
-      }
+      const judge = await this.filter.judge(segment.samples)
       events.push({
         type: 'segment',
         start: segment.start,
-        durationSeconds: segment.samples.length / SAMPLE_RATE,
-        similarity,
-        accepted,
+        durationSeconds: judge.durationSeconds,
+        similarity: this.filter.enrolled ? judge.similarity : null,
+        accepted: judge.accepted,
         samples: segment.samples,
       })
     }

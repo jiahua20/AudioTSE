@@ -8,7 +8,7 @@ import numpy as np
 import sherpa_onnx
 import wave
 
-ROOT = Path(__file__).resolve().parents[4]  # 仓库根
+ROOT = Path(__file__).resolve().parents[5]  # 仓库根
 MODEL = ROOT / "app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx"
 SAMPLES = ROOT / "app/samples"
 OUT = Path(__file__).resolve().parents[1] / "fixtures"

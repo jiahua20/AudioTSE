@@ -1,13 +1,24 @@
 {
   "name": "@audiotse/gate",
   "version": "0.1.0",
-  "description": "AudioTSE 声纹门控 SDK（TS）：silero VAD 切段 + 3D-Speaker ER2Net 声纹相似度门控",
+  "description": "AudioTSE 声纹门控 SDK：主入口 = VAD+门控完整版；'@audiotse/gate/core' = 无 VAD 声纹过滤核心（外部已有 VAD 的场景，如内网）",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "main": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./core": {
+      "main": "./dist/core/index.js",
+      "types": "./dist/core/index.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "validate": "tsx test/validate-embedding.ts",
-    "test": "tsx test/gate-e2e.ts"
+    "validate": "tsx test/full/validate-embedding.ts",
+    "test": "tsx test/full/gate-e2e.ts",
+    "test:core": "tsx test/core/filter-e2e.ts"
   },
   "engines": {
     "node": ">=18.20"

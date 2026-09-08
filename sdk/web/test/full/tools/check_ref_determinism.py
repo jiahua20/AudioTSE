@@ -4,7 +4,7 @@ import sherpa_onnx
 import wave
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[5]
 MODEL = ROOT / "app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx"
 FIX = Path(__file__).resolve().parents[1] / "fixtures"
 print("sherpa_onnx:", sherpa_onnx.__version__)

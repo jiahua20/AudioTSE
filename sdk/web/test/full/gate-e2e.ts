@@ -6,10 +6,10 @@
 // 用法：npm test（在 sdk/web 下）
 import * as path from 'node:path'
 
-import { SpeakerGate, SAMPLE_RATE } from '../src/speaker-gate'
-import { createSileroVad } from '../src/vad'
+import { SpeakerGate, SAMPLE_RATE } from '../../src/full/speaker-gate'
+import { createSileroVad } from '../../src/full/vad'
 
-const ROOT = path.resolve(__dirname, '..', '..', '..') // 仓库根
+const ROOT = path.resolve(__dirname, '..', '..', '..', '..') // 仓库根
 const MODELS = path.join(ROOT, 'app/models')
 const VAD_MODEL = path.join(MODELS, 'silero_vad/silero_vad.onnx')
 const SPEAKER_MODEL = path.join(

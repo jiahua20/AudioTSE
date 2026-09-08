@@ -13,7 +13,7 @@ import torch
 import torchaudio.compliance.kaldi as kaldi
 import wave
 
-ROOT = Path(__file__).resolve().parents[4]  # 仓库根
+ROOT = Path(__file__).resolve().parents[5]  # 仓库根
 SAMPLES = ROOT / "app/samples"
 OUT = Path(__file__).resolve().parents[1] / "fixtures"
 

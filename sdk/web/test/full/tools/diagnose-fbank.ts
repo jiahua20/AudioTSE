@@ -2,9 +2,9 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { computeFbank } from '../../src/fbank'
+import { computeFbank } from '../../../src/core/index'
 
-const ROOT = path.resolve(__dirname, '..', '..', '..', '..')
+const ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..')
 const SAMPLES = path.join(ROOT, 'app/samples')
 const FIXTURES = path.join(__dirname, '..', 'fixtures')
 

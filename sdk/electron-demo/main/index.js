@@ -1,14 +1,16 @@
-// 主进程：加载 web SDK（@audiotse/gate）做 VAD+声纹门控，渲染进程通过 IPC 喂音频。
-// 模型默认取仓库 app/models/（与原型共用一份模型文件），可用 AUDIOTSE_MODELS 覆盖目录。
+// 主进程：加载声纹门控 SDK（相对路径引 sdk/web 包，无需 npm 依赖）做 VAD+门控，
+// 渲染进程通过 IPC 喂音频。模型默认取仓库 app/models/（与原型共用一份模型文件），
+// 可用 AUDIOTSE_MODELS 覆盖目录。
 const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('node:path')
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
+const WEB_SDK = path.resolve(__dirname, '..', '..', 'web') // ../web 包（需先 npm install + npm run build）
 const MODELS_DIR = process.env.AUDIOTSE_MODELS || path.join(REPO_ROOT, 'app', 'models')
 
 /** @type {BrowserWindow | null} */
 let win = null
-/** @type {import('@audiotse/gate').SpeakerGate | null} */
+/** @type {import('../../web').SpeakerGate | null} */
 let gate = null
 let monitoring = false
 let enrolling = false
@@ -46,7 +48,7 @@ app.whenReady().then(async () => {
   createWindow()
   console.log('[demo] window created, models dir:', MODELS_DIR)
   try {
-    const { SpeakerGate } = require('@audiotse/gate')
+    const { SpeakerGate } = require(WEB_SDK)
     gate = await SpeakerGate.create({
       vadModel: path.join(MODELS_DIR, 'silero_vad', 'silero_vad.onnx'),
       speakerModel: path.join(

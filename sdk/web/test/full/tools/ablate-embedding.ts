@@ -3,11 +3,11 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-import { SpeakerEmbedder } from '../../src/embedder'
-import { computeFbank } from '../../src/fbank'
+import { SpeakerEmbedder } from '../../../src/core/index'
+import { computeFbank } from '../../../src/core/index'
 import * as ort from 'onnxruntime-node'
 
-const ROOT = path.resolve(__dirname, '..', '..', '..', '..')
+const ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..')
 const SPEAKER_MODEL = path.join(
   ROOT,
   'app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx',

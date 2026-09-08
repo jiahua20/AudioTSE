@@ -5,12 +5,17 @@ VAD+声纹门控 → 界面实时显示每段相似度 → **只回放被放行�
 
 ## 运行
 
-前置：仓库根 `sdk/` 下 `npm install`、`npm run build -w web`；模型已由
-`app/start.ps1` 下载到 `app/models/`（demo 直接复用，不重复下载）。
+前置：模型已由 `app/start.ps1` 下载到 `app/models/`（demo 直接复用，不重复下载）。
+本 demo 与 `sdk/web` 各自独立 node_modules，不共享：
 
 ```powershell
-cd sdk
-npm start -w electron-demo
+cd sdk\web
+npm install
+npm run build        # 生成 dist/（demo 通过相对路径 ../../web 引用）
+
+cd ..\electron-demo
+npm install          # 只装 electron
+npm start
 ```
 
 用法：点「注册」说**四个字左右**（如「我是本人」），说完自动完成——SDK 内部剥
