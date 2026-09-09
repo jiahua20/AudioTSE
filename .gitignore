@@ -54,3 +54,7 @@ Thumbs.db
 *.sw?
 
 *.wav
+
+# C++ SDK 构建产物与预编译依赖（sdk/cpp）
+sdk/cpp/build*/
+sdk/cpp/third_party/

@@ -1,0 +1,124 @@
+// 声纹门控完整版：VAD 切段 + 声纹判定。声纹注册/比对/短注册阈值补偿复用 core 的
+// VoiceFilter，本类只负责「VAD 切段 → 逐段喂给 VoiceFilter」以及注册音频的静音剥离。
+// 与 app 后端 speaker_gate.py 同一套模型和判定语义，与 web SDK 的 full/speaker-gate.ts
+// 一一对应；区别是 v0 按段整段判定（app 另有段内 0.6s 预热的增量判定，属 ASR 联动
+// 的实时性优化，SDK 后续版本再做）。
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "audiotse/core/voice_filter.hpp"
+
+namespace audiotse {
+
+struct SpeakerGateConfig {
+    /// silero_vad.onnx 路径
+    std::string vad_model;
+    /// 3D-Speaker ER2Net onnx 路径
+    std::string speaker_model;
+    /// 放行所需的相似度阈值基准，默认 0.5（与 app 后端一致）
+    float threshold = 0.5f;
+    /// 注册的净语音目标（秒）：流式注册累计到该时长即视为足够，说完自动完成。
+    /// 默认 1.2 秒 ≈ 四~六个汉字的正常语速
+    double enroll_target_speech_seconds = 1.2;
+    /// 注册允许的最少净语音（秒），不足则 FinishEnroll 抛错。默认 0.6
+    double enroll_min_speech_seconds = 0.6;
+    /// 短注册阈值补偿系数（透传给 VoiceFilter），默认 0.7，设 1 禁用
+    float short_enroll_threshold_factor = 0.7f;
+
+    // ── VAD 参数（与 app 后端 speaker_gate.py 一致，同时作用于主 VAD 与注册 VAD）──
+    /// 语音概率阈值
+    float vad_threshold = 0.5f;
+    /// 判定段结束所需最短静音（秒）
+    float min_silence_duration = 0.3f;
+    /// 成段所需最短语音（秒）
+    float min_speech_duration = 0.1f;
+    /// 单段最长语音（秒），超过强制切段
+    float max_speech_duration = 15.0f;
+    /// VAD 线程数
+    int32_t vad_num_threads = 1;
+    /// 声纹提取线程数
+    int32_t embed_num_threads = 2;
+};
+
+struct GateSegmentEvent {
+    /// 段起点在整条流中的采样序号
+    int64_t start = 0;
+    /// 段时长（秒）
+    float duration_seconds = 0.0f;
+    /// 与注册声纹的余弦相似度；未注册时 has_similarity=false（全放行）
+    float similarity = 1.0f;
+    bool has_similarity = false;
+    bool accepted = false;
+    /// 段内音频（float [-1,1] @16k），宿主可自行播放/送 ASR
+    std::vector<float> samples;
+};
+
+/// 流式注册进度：已累计的净语音时长、是否已达目标
+struct EnrollProgress {
+    double speech_seconds = 0.0;
+    bool enough = false;
+};
+
+class SpeakerGate {
+public:
+    /// 加载 VAD 与声纹模型
+    explicit SpeakerGate(const SpeakerGateConfig &config);
+    ~SpeakerGate();
+
+    SpeakerGate(const SpeakerGate &) = delete;
+    SpeakerGate &operator=(const SpeakerGate &) = delete;
+
+    /// 是否已有注册声纹（未注册时所有段放行）
+    bool Enrolled() const;
+
+    /// 当前实际生效的放行阈值（短注册补偿后）
+    float EffectiveThreshold() const;
+
+    // ── 批式注册（一次性给整段音频）────────────────────────
+    /// 便捷注册：整段音频内部剥静音后提声纹（静音不参与特征统计，短注册更稳）。
+    /// 返回实际使用的净语音时长；净语音不足下限时抛 std::runtime_error。
+    EnrollResult Enroll(const float *samples, size_t n);
+    EnrollResult Enroll(const std::vector<float> &samples) {
+        return Enroll(samples.data(), samples.size());
+    }
+
+    // ── 流式注册（边说边收，够量自动完成）──────────────────
+    /// 开始一次流式注册：复位累计状态
+    void BeginEnroll();
+
+    /// 喂入一段注册音频（注册走独立 VAD，可与 AcceptWaveform 交替使用不影响主流）。
+    /// 返回当前净语音进度；enough=true 表示已达目标，宿主应停麦并 FinishEnroll()。
+    /// 注意：与 AcceptWaveform 不可真正并发（共享声纹推理器），宿主串行调用即可。
+    EnrollProgress EnrollChunk(const float *samples, size_t n);
+    EnrollProgress EnrollChunk(const std::vector<float> &samples) {
+        return EnrollChunk(samples.data(), samples.size());
+    }
+
+    /// 结束注册（冲出尾部语音段后）提声纹。
+    /// 净语音低于下限时抛 std::runtime_error（调用方提示「没听清/再说一句」），
+    /// 注册状态保持未完成。
+    EnrollResult FinishEnroll();
+
+    /// 喂入一段流式音频，返回自此完结的语音段及其门控判定
+    std::vector<GateSegmentEvent> AcceptWaveform(const float *samples, size_t n);
+    std::vector<GateSegmentEvent> AcceptWaveform(const std::vector<float> &samples) {
+        return AcceptWaveform(samples.data(), samples.size());
+    }
+
+    /// 流结束：冲出尾部未完结的语音段并判定
+    std::vector<GateSegmentEvent> Flush();
+
+    /// 复位 VAD 与段状态（注册声纹保留）
+    void Reset();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace audiotse

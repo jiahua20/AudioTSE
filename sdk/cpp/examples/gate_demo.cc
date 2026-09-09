@@ -3,11 +3,13 @@
 // wav 需为 16 kHz 单声道 PCM16。
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <fstream>
+#include <numeric>
 #include <string>
 #include <vector>
 
-#include "audiotse/speaker_gate.hpp"
+#include "audiotse/full/speaker_gate.hpp"
 
 namespace {
 
@@ -47,24 +49,47 @@ int main(int argc, char **argv) {
     if (argc > 3) config.threshold = std::strtof(argv[3], nullptr);
 
     audiotse::SpeakerGate gate(config);
-    const std::vector<float> enroll = ReadWav(argv[1]);
-    gate.Enroll(enroll);
-    std::printf("注册完成（%.1f s）\n", enroll.size() / 16000.0f);
 
+    // 注册：整段喂入，内部剥静音后提声纹（短注册自动启用阈值补偿）
+    const std::vector<float> enroll = ReadWav(argv[1]);
+    std::printf("注册音频 %.2fs，判定中...\n", enroll.size() / 16000.0);
+    audiotse::EnrollResult enrolled;
+    try {
+        enrolled = gate.Enroll(enroll);
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "注册失败：%s\n", e.what());
+        return 1;
+    }
+    std::printf("注册完成：净语音 %.2fs，生效阈值 %.3f（基准 %.3f）\n", enrolled.speech_seconds,
+                gate.EffectiveThreshold(), config.threshold);
+
+    // 流式喂入：每 100ms 一块，段完结时返回判定
     const std::vector<float> stream = ReadWav(argv[2]);
     constexpr size_t kChunk = 1600;  // 100 ms 流式喂入
-    std::vector<audiotse::GateSegment> events;
+    std::vector<audiotse::GateSegmentEvent> events;
     for (size_t offset = 0; offset < stream.size(); offset += kChunk) {
         const size_t n = std::min(kChunk, stream.size() - offset);
-        std::vector<audiotse::GateSegment> chunk_events = gate.AcceptWaveform(stream.data() + offset, n);
+        std::vector<audiotse::GateSegmentEvent> chunk_events = gate.AcceptWaveform(stream.data() + offset, n);
         events.insert(events.end(), chunk_events.begin(), chunk_events.end());
     }
-    std::vector<audiotse::GateSegment> tail = gate.Flush();
+    std::vector<audiotse::GateSegmentEvent> tail = gate.Flush();
     events.insert(events.end(), tail.begin(), tail.end());
 
-    for (const audiotse::GateSegment &event : events) {
-        std::printf("[%.2fs +%.2fs] 相似度 %.3f → %s\n", event.start / 16000.0, event.duration_seconds,
-                    event.similarity, event.accepted ? "放行" : "拒绝");
+    int accepted_count = 0;
+    for (const audiotse::GateSegmentEvent &event : events) {
+        std::printf("[%.2fs +%.2fs] ", event.start / 16000.0, event.duration_seconds);
+        if (event.has_similarity) {
+            std::printf("相似度 %.3f → %s\n", event.similarity, event.accepted ? "放行" : "拒绝");
+        } else {
+            std::printf("未注册 → 放行\n");
+        }
+        accepted_count += event.accepted ? 1 : 0;
     }
+    std::printf("共 %zu 段，放行 %d 段（放行语音 %.2fs / %.2fs）\n", events.size(), accepted_count,
+                std::accumulate(events.begin(), events.end(), 0.0,
+                                [](double acc, const audiotse::GateSegmentEvent &e) {
+                                    return acc + (e.accepted ? e.duration_seconds : 0.0);
+                                }),
+                static_cast<double>(stream.size()) / 16000.0);
     return 0;
 }

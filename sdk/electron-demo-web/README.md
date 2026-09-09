@@ -1,7 +1,8 @@
-# 声纹门控最小 Electron Demo
+# 声纹门控最小 Electron Demo（web SDK）
 
 演示 `@audiotse/gate`（`sdk/web`）在 Electron 里的最小接入：麦克风采集 → 主进程
 VAD+声纹门控 → 界面实时显示每段相似度 → **只回放被放行（目标说话人）的语音**。
+（C++ SDK 的对照版见 `sdk/electron-demo-cpp`，界面与交互完全相同，后端可互换。）
 
 ## 运行
 
@@ -13,7 +14,7 @@ cd sdk\web
 npm install
 npm run build        # 生成 dist/（demo 通过相对路径 ../../web 引用）
 
-cd ..\electron-demo
+cd ..\electron-demo-web
 npm install          # 只装 electron
 npm start
 ```
