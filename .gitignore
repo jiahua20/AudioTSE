@@ -58,3 +58,6 @@ Thumbs.db
 # C++ SDK 构建产物与预编译依赖（sdk/cpp）
 sdk/cpp/build*/
 sdk/cpp/third_party/
+
+# N-API addon 构建产物（sdk/cpp-napi）
+sdk/cpp-napi/build*/

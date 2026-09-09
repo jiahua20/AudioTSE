@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     激活 Visual Studio 开发环境，使 cmake、ninja、cl、msbuild 等工具在当前 PowerShell 会话中可用。
 .DESCRIPTION

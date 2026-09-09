@@ -1,0 +1,17 @@
+{
+  "name": "@audiotse/gate-napi",
+  "version": "0.1.0",
+  "description": "AudioTSE 声纹门控 C++ SDK 的 N-API addon（sherpa-onnx 原生 VAD+声纹），API 与 @audiotse/gate 对齐，Node/Electron 免重编译直载",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "powershell -ExecutionPolicy Bypass -File .\\build.ps1"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.3.1",
+    "node-addon-api": "^8.9.2"
+  },
+  "engines": {
+    "node": ">=18.20"
+  }
+}

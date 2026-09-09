@@ -1,0 +1,14 @@
+{
+  "name": "audiotse-gate-demo-napi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AudioTSE 声纹门控最小 Electron demo（C++ SDK N-API 直载版：mic → 原生 VAD+声纹门控 → 只听目标说话人）",
+  "main": "main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test-gate-napi.js"
+  },
+  "devDependencies": {
+    "electron": "41.7.1"
+  }
+}

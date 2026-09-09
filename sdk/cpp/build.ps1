@@ -1,4 +1,4 @@
-# 一键构建：激活 VS 环境 → 准备 sherpa-onnx 预编译包（缺失则下载）→ cmake configure + build。
+﻿# 一键构建：激活 VS 环境 → 准备 sherpa-onnx 预编译包（缺失则下载）→ cmake configure + build。
 # 用法：.\build.ps1                Release 构建
 #       .\build.ps1 -Config Debug
 param(
@@ -33,9 +33,10 @@ if (-not (Test-Path (Join-Path $sherpaRoot 'include'))) {
     if (-not (Test-Path (Join-Path $sherpaRoot 'include'))) { throw "解压结果缺少 include/: $sherpaRoot" }
 }
 
-# 3) cmake configure + build（Ninja 单配置生成器）
+# 3) cmake configure + build（Ninja 单配置生成器）。
+#    -D 参数必须整体加引号：PowerShell 对裸的 -DX=$v 不做变量展开，会把字面量传给 cmake。
 $build = Join-Path $root 'build'
-cmake -S $root -B $build -G Ninja -DCMAKE_BUILD_TYPE=$Config -DAUDIOTSE_SHERPA_ROOT=$sherpaRoot
+cmake -S $root -B $build -G Ninja "-DCMAKE_BUILD_TYPE=$Config" "-DAUDIOTSE_SHERPA_ROOT=$sherpaRoot"
 if ($LASTEXITCODE -ne 0) { throw "cmake configure 失败" }
 cmake --build $build
 if ($LASTEXITCODE -ne 0) { throw "cmake build 失败" }

@@ -91,3 +91,6 @@ if (filter.Filter(seg_samples)) 回传(seg_samples);  // 便捷过滤
 
 保持同一 `AcceptWaveform` 流式接口，被拒绝/接受段改送 WeSep BSRNN（ONNX 导出）
 做真分离，宿主代码无感切换。参见 `app/README.md`「TSE 生产接入」。
+
+> Node/Electron 宿主请优先用 N-API 封装 `sdk/cpp-napi`（进程内 require 直载，
+> API 与 web 版同名），子进程桥接 `gate_stream.exe` 保留给非 Node 宿主。
