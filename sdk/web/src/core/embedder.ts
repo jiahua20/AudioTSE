@@ -1,8 +1,8 @@
 // 说话人声纹提取器：sherpa-onnx-node 的 SpeakerEmbeddingExtractor（原生 N-API）。
 // 与内网项目的 sherpa-onnx-node 共用同一 onnxruntime 运行时，进程内无 dll 冲突
 // （迁移前用 onnxruntime-node，与 sherpa-onnx-win-x64 自带的 onnxruntime.dll 同名
-// 相撞会报 Windows 193）。声纹与迁移前 fbank+onnxruntime 路径逐位一致（对拍
-// cos=1.0，见 test/full/validate-embedding.ts）；调用序列与 cpp 版 embedder.cpp 同源。
+// 相撞会报 Windows 193）。声纹与 sherpa_onnx Python 引擎对拍 cos≥0.9999
+// （见 test/full/validate-embedding.ts）；调用序列与 cpp 版 embedder.cpp 同源。
 import { SpeakerEmbeddingExtractor } from 'sherpa-onnx-node'
 
 export class SpeakerEmbedder {

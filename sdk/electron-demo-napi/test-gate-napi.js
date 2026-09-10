@@ -1,7 +1,7 @@
 // N-API SDK 验证：直连 @audiotse/gate-napi（不走 Electron，纯 Node 即可跑），
 // 用 100ms 块流式注册 enroll_target.wav → 流式监听 mixed.wav → flush 冲尾，
-// 校验分段与判定是否与 web SDK 流式基准一致（compare-streaming.ts 对拍值，
-// gate_stream.exe 版 test-gate-stream.js 断言的是同一组数值）。
+// 校验分段与判定是否与 web SDK 流式基准一致（sdk/web/script/compare-streaming.ts
+// 的对拍值）。
 // 用法：node test-gate-napi.js（在任意目录）
 const fs = require('node:fs')
 const path = require('node:path')
@@ -48,13 +48,13 @@ function readWav(file) {
   let progress = null
   for (let off = 0; off < enroll.length; off += 1600) {
     progress = await gate.enrollChunk(enroll.subarray(off, Math.min(off + 1600, enroll.length)))
-    if (progress.enough) break // 与 demo/gate_stream 一致：够了就收尾
+    if (progress.enough) break // 净语音够量即收尾
   }
   if (progress?.enough) {
     enrolled = await gate.finishEnroll()
   } else {
     try {
-      enrolled = await gate.finishEnroll() // 整段喂完仍未达目标也收尾（'F' 语义）
+      enrolled = await gate.finishEnroll() // 整段喂完仍未达目标也正常收尾
     } catch (e) {
       throw new Error(`注册失败：${e.message}`)
     }

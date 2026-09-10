@@ -1,6 +1,6 @@
 // 主进程：require @audiotse/gate-napi（C++ SDK 的 N-API addon，Electron 免重编译直载，
 // 推理在 libuv 工作线程执行不阻塞主进程），结构与 electron-demo-web 的接入方式一致，
-// renderer/preload 也与 web demo 完全相同——三个 demo 的后端可互换。
+// renderer/preload 也与 web demo 完全相同——两个 demo 的后端可互换。
 // 模型默认取仓库 app/models/，可用 AUDIOTSE_MODELS 覆盖目录。
 const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('node:path')

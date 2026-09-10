@@ -12,9 +12,7 @@ export {
   VoiceFilter,
   cosine,
   SpeakerEmbedder,
-  computeFbank,
   type VoiceFilterConfig,
   type JudgeResult,
-  type FbankOptions,
 } from '../core/index'
 export { createSileroVad, DEFAULT_VAD_OPTIONS, type SileroVadOptions, type Vad } from './vad'

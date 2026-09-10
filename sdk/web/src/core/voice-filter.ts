@@ -3,8 +3,8 @@
 //   enroll(samples)  注册目标说话人（一段完整语音）
 //   judge(samples)   判定一段语音是否目标说话人（返回相似度 + accepted）
 //   filter(samples)  便捷过滤：目标说话人的语音原样返回，否则返回 null
-// 特征前端与推理和 full 版完全同源（fbank 对齐 sherpa-onnx、ER2Net ONNX、
-// 声纹与 Python 引擎对拍 cos≥0.9999），只是不含 VAD。
+// 声纹提取在 embedder（sherpa SpeakerEmbeddingExtractor 原生实现），
+// 与 sherpa-onnx Python 引擎对拍 cos≥0.9999。
 import { SpeakerEmbedder } from './embedder'
 
 export const SAMPLE_RATE = 16000

@@ -2,8 +2,8 @@
 
 与 `sdk/electron-demo-web` 界面与交互完全相同的版本：后端从 web SDK 换成
 **C++ SDK 的 N-API addon**（`sdk/cpp-napi`，自包含构建根），主进程直接 `require()`
-加载原生 `.node`——无子进程、无 stdin/stdout 协议，推理在工作线程执行不阻塞主
-进程。N-API ABI 稳定，无需 electron-rebuild。
+加载原生 `.node`，推理在工作线程执行不阻塞主进程。N-API ABI 稳定，无需
+electron-rebuild。
 
 架构：渲染进程麦克风采集（AudioWorklet 100ms 块）→ IPC → 主进程 →
 `@audiotse/gate-napi`（原生 VAD+声纹门控）；renderer 与 preload 与 web demo

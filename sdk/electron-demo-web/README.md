@@ -2,11 +2,12 @@
 
 演示 `@audiotse/gate`（`sdk/web`）在 Electron 里的最小接入：麦克风采集 → 主进程
 VAD+声纹门控 → 界面实时显示每段相似度 → **只回放被放行（目标说话人）的语音**。
-（C++ SDK 的对照版见 `sdk/electron-demo-cpp`，界面与交互完全相同，后端可互换。）
+（C++ 对照版见 `sdk/electron-demo-napi`，界面与交互完全相同，后端可互换。）
 
 ## 运行
 
-前置：模型已由 `app/start.ps1` 下载到 `app/models/`（demo 直接复用，不重复下载）。
+前置：模型已由 `app/start.ps1` 下载到 `app/models/`（demo 直接复用，不重复下载；
+VAD 用 `silero_vad_v4.onnx`——sherpa-onnx-node 1.12.1 不支持 v5，两者切段结果一致）。
 本 demo 与 `sdk/web` 各自独立 node_modules，不共享：
 
 ```powershell
@@ -41,5 +42,5 @@ renderer/         纯静态页面（无构建链）：AudioWorklet 采麦 16k、
 ## 换模型目录
 
 ```powershell
-$env:AUDIOTSE_MODELS = "D:\somewhere\models"; npm start -w electron-demo
+$env:AUDIOTSE_MODELS = "D:\somewhere\models"; npm start
 ```

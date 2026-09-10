@@ -18,7 +18,7 @@
 npm install
 npm run build       # src → dist（dist/index.js 完整版；dist/core/ 核心版）
 npm run test:core   # core 端到端
-npm run validate    # 对拍验证（fbank vs torchaudio、声纹 vs sherpa Python）
+npm run validate    # 声纹对拍（sherpa extractor vs sherpa Python 引擎，cos≥0.999）
 npm test            # full 端到端（短注册/轮流发言/重叠语音）
 ```
 
@@ -117,13 +117,8 @@ npm 安装方式（有私服/离线 tgz 时）：`require('@audiotse/gate/core')
 
 | 环节 | 实现 | 说明 |
 |---|---|---|
-| VAD 切段 | `sherpa-onnx` npm（WASM） | 封装层统一按 160ms 切块喂入（sherpa WASM 对大块单次喂入会丢段边界），行为与调用方块大小无关 |
-| 声纹判定 | 本包 core | fbank + onnxruntime-node，与 Python 引擎对拍一致 |
-
-fbank 参数按 sherpa-onnx 源码（`csrc/features.h`）固定：25/10ms、povey 窗、
-dither=0、**high_freq=-400（7600Hz 上限）**、**snip_edges=false（居中+反射填充）**、
-80 mel、mel 域三角滤波不归一、fbank 后整段减均值（模型元数据
-`feature_normalize_type=global-mean`）。
+| VAD 切段 | sherpa-onnx-node 原生 `Vad` | 封装层统一按 160ms 切块喂入（sherpa 对大块单次喂入会丢段边界），行为与调用方块大小无关；模型用 silero **v4**（1.12.1 不支持 v5，切段结果实测一致） |
+| 声纹判定 | 本包 core（sherpa `SpeakerEmbeddingExtractor`） | 特征前端（fbank/归一化）与 ER2Net 推理均在 sherpa 原生代码内完成，与 Python 引擎对拍 cos≥0.9999 |
 
 ### 使用
 
@@ -131,7 +126,7 @@ dither=0、**high_freq=-400（7600Hz 上限）**、**snip_edges=false（居中+�
 import { SpeakerGate } from '@audiotse/gate'
 
 const gate = await SpeakerGate.create({
-  vadModel: 'app/models/silero_vad/silero_vad.onnx',
+  vadModel: 'app/models/silero_vad/silero_vad_v4.onnx',
   speakerModel: 'app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx',
   threshold: 0.5,                      // 放行阈值基准（默认同 app 后端）
   enrollTargetSpeechSeconds: 1.2,      // 注册净语音目标：够了自动完成（≈四个字）
@@ -175,7 +170,7 @@ for (const seg of await gate.accept(chunk)) {   // 监听：流式喂 100ms 块
 ## 结构
 
 ```
-src/core/   fbank.ts / embedder.ts / voice-filter.ts（无 VAD，内网入口）
+src/core/   embedder.ts / voice-filter.ts（无 VAD，内网入口）
 src/full/   vad.ts / speaker-gate.ts（组合 core 的 VoiceFilter + VAD 切段 + 注册剥静音）
 src/index.ts 包主入口 = full；'@audiotse/gate/core' 子路径入口 = src/core
 test/core/  core 端到端（自带极简 wav 读取，不依赖 sherpa）

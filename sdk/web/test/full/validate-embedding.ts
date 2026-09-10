@@ -1,17 +1,12 @@
-// 对拍验证（两层）：
-// 1. 特征级：computeFbank vs torchaudio 参考特征（test/fixtures/ref_fbank_*.npy，
-//    由 test/tools/make_reference_fbank.py 生成），逐元素比 max|diff|。fbank 已不在
-//    SDK 数据路径上（声纹改走 sherpa SpeakerEmbeddingExtractor），本层校验该独立
-//    工具本身的正确性。
-// 2. 声纹级：sherpa-onnx-node 的 SpeakerEmbeddingExtractor 跑 ER2Net，与
-//    sherpa_onnx Python 参考声纹比余弦，应 ≈1.0（即与迁移前 fbank+onnxruntime
-//    路径一致，两者已互拍 cos=1.0）。
+// 声纹级对拍验证：sherpa-onnx-node 的 SpeakerEmbeddingExtractor（SDK 实际路径）
+// 跑 ER2Net，与 sherpa_onnx Python 引擎的参考声纹（test/fixtures/ref_emb_*.npy，
+// 由 test/full/tools/make_reference_embeddings.py 用 sherpa_onnx Python 生成）
+// 比余弦，应 ≈1.0——即 SDK 判定路径与官方引擎一致。
 // 用法：npm run validate（在 sdk/web 下）
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { SpeakerEmbedder } from '../../src/core/index'
-import { computeFbank, type FbankOptions } from '../../src/core/index'
 
 const ROOT = path.resolve(__dirname, '..', '..', '..', '..') // 仓库根
 const SPEAKER_MODEL = path.join(
@@ -21,7 +16,6 @@ const SPEAKER_MODEL = path.join(
 const SAMPLES = path.join(ROOT, 'app/samples')
 const FIXTURES = path.join(__dirname, 'fixtures')
 const EMBED_NAMES = ['enroll_target', 'other_clean', 'target_clean'] as const
-const FBANK_NAMES = ['enroll_target', 'other_clean'] as const
 
 /** 读 npy（小端 float32 矩阵，行优先）。npy 头 64 字节对齐，数据必 4 字节对齐。 */
 function readNpy(file: string): Float32Array {
@@ -54,14 +48,6 @@ function norm(a: Float32Array): number {
 function cosine(a: Float32Array, b: Float32Array): number {
   return dot(a, b) / (norm(a) * norm(b))
 }
-function maxAbsDiff(a: Float32Array, b: Float32Array): number {
-  let worst = 0
-  for (let i = 0; i < a.length; i++) {
-    const d = Math.abs(a[i] - b[i])
-    if (d > worst) worst = d
-  }
-  return worst
-}
 
 async function main(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -73,37 +59,6 @@ async function main(): Promise<void> {
     return wave.samples
   }
 
-  // ── 第一层：特征级逐元素对拍 ────────────────────────────────────────────
-  console.log('== 特征级对拍（computeFbank vs torchaudio kaldi.fbank）==')
-  console.log('melNorm | enroll_target max|diff|  other_clean max|diff|')
-  const normChoices = ['raw', 'sum', 'slope'] as const
-  const featureScores: Array<{ melNorm: (typeof normChoices)[number]; worst: number }> = []
-  for (const melNorm of normChoices) {
-    const opts: FbankOptions = { melNorm }
-    const diffs = FBANK_NAMES.map((name) => {
-      const mine = computeFbank(loadWav(name), opts)
-      const ref = readNpy(path.join(FIXTURES, `ref_fbank_${name}.npy`))
-      if (mine.length !== ref.length) {
-        throw new Error(`${name}: 帧数不一致 mine=${mine.length} ref=${ref.length}`)
-      }
-      return maxAbsDiff(mine, ref)
-    })
-    const worst = Math.max(...diffs)
-    featureScores.push({ melNorm, worst })
-    console.log(`${melNorm.padEnd(7)} | ${diffs[0].toExponential(3).padEnd(20)} ${diffs[1].toExponential(3)}`)
-  }
-  featureScores.sort((a, b) => a.worst - b.worst)
-  const winner = featureScores[0]
-  // 浮点累加顺序差异下，逐元素误差应在 1e-3 量级以内
-  if (winner.worst > 2e-3) {
-    throw new Error(
-      `特征级对拍失败：最好的 melNorm=${winner.melNorm} 也有 max|diff|=${winner.worst.toExponential(3)}，` +
-        '需对照 torchaudio.compliance.kaldi 源码核对实现',
-    )
-  }
-  console.log(`胜出 melNorm=${winner.melNorm}（max|diff|=${winner.worst.toExponential(3)}，浮点抖动范围）\n`)
-
-  // ── 第二层：声纹级余弦对拍（sherpa SpeakerEmbeddingExtractor）────────────
   console.log('== 声纹级对拍（sherpa extractor vs sherpa_onnx Python 参考声纹）==')
   const embedder = await SpeakerEmbedder.create(SPEAKER_MODEL)
   const sims: number[] = []
@@ -118,7 +73,7 @@ async function main(): Promise<void> {
   }
   const worst = Math.min(...sims)
   if (worst >= 0.999) {
-    console.log(`\nPASS：两层对拍全部通过（声纹最差 cos=${worst.toFixed(6)}）`)
+    console.log(`\nPASS：与 sherpa_onnx Python 引擎一致（最差 cos=${worst.toFixed(6)}）`)
   } else {
     throw new Error(`声纹级对拍失败：最差 cos=${worst.toFixed(6)}（应 ≥0.999）`)
   }

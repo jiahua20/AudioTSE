@@ -1,4 +1,4 @@
-// 主进程：加载声纹门控 SDK（相对路径引 sdk/web 包，无需 npm 依赖）做 VAD+门控，
+// 主进程：加载声纹门控 SDK（相对路径引 sdk/web 包）做 VAD+门控，
 // 渲染进程通过 IPC 喂音频。模型默认取仓库 app/models/（与原型共用一份模型文件），
 // 可用 AUDIOTSE_MODELS 覆盖目录。
 const { app, BrowserWindow, ipcMain } = require('electron')
