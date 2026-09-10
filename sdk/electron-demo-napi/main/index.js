@@ -15,6 +15,13 @@ let win = null
 let gate = null
 let monitoring = false
 let enrolling = false
+// renderer 加载完 app.js（挂好 IPC 监听）之前发的消息会被直接丢弃——IPC 不缓存，
+// 初始化类消息必须等 did-finish-load 之后再发，两处以先到者为准补发
+let pageLoaded = false
+
+function sendInit(channel, payload) {
+  if (win && !win.isDestroyed() && pageLoaded) win.webContents.send(channel, payload)
+}
 
 async function completeEnroll() {
   if (!enrolling || !gate) return
@@ -32,6 +39,7 @@ function forward(event) {
 }
 
 function createWindow() {
+  pageLoaded = false
   win = new BrowserWindow({
     width: 980,
     height: 720,
@@ -41,6 +49,11 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  })
+  // 页面（重新）加载完后若 SDK 已就绪则补发 gate:ready（reload 后 renderer 需要重新同步）
+  win.webContents.on('did-finish-load', () => {
+    pageLoaded = true
+    if (gate) sendInit('gate:ready', { models: MODELS_DIR, backend: 'napi' })
   })
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
 }
@@ -59,10 +72,10 @@ app.whenReady().then(async () => {
       ),
     })
     console.log('[demo] speaker gate ready (native napi)')
-    win.webContents.send('gate:ready', { models: MODELS_DIR, backend: 'napi' })
+    sendInit('gate:ready', { models: MODELS_DIR, backend: 'napi' })
   } catch (error) {
     console.error('[demo] gate init failed（先在 sdk\\cpp-napi 运行 .\\build.ps1）:', error)
-    win.webContents.send('gate:error', String(error))
+    sendInit('gate:error', String(error))
   }
 
   ipcMain.on('gate:enrollBegin', () => {

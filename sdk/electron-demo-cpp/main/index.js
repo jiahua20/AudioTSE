@@ -25,8 +25,17 @@ const SPEAKER_MODEL = path.join(
 let win = null
 /** @type {import('node:child_process').ChildProcess | null} */
 let gate = null
+// renderer 加载完 app.js（挂好 IPC 监听）之前发的消息会被直接丢弃——IPC 不缓存，
+// 初始化类消息必须等 did-finish-load 之后再发，两处以先到者为准补发
+let pageLoaded = false
+let gateReady = false
+
+function sendInit(channel, payload) {
+  if (win && !win.isDestroyed() && pageLoaded) win.webContents.send(channel, payload)
+}
 
 function createWindow() {
+  pageLoaded = false
   win = new BrowserWindow({
     width: 980,
     height: 720,
@@ -37,6 +46,11 @@ function createWindow() {
       nodeIntegration: false,
     },
   })
+  // 页面（重新）加载完后若子进程已 ready 则补发 gate:ready（reload 后 renderer 需要重新同步）
+  win.webContents.on('did-finish-load', () => {
+    pageLoaded = true
+    if (gateReady) sendInit('gate:ready', { models: MODELS_DIR, backend: 'cpp' })
+  })
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
 }
 
@@ -45,7 +59,8 @@ function onMessage(msg) {
   if (!win || win.isDestroyed()) return
   switch (msg.type) {
     case 'ready':
-      win.webContents.send('gate:ready', { models: MODELS_DIR, backend: 'cpp' })
+      gateReady = true
+      sendInit('gate:ready', { models: MODELS_DIR, backend: 'cpp' })
       break
     case 'enrollProgress':
       win.webContents.send('gate:enrollProgress', {
@@ -57,7 +72,8 @@ function onMessage(msg) {
       win.webContents.send('gate:enrolled', { speechSeconds: msg.speechSeconds })
       break
     case 'error':
-      win.webContents.send('gate:error', msg.message)
+      // 子进程初始化失败可能早于页面加载完（与 ready 同一竞态），统一走 sendInit
+      sendInit('gate:error', msg.message)
       break
     case 'segment': {
       // int16 量化样本 → float32，交给渲染进程回放
