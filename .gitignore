@@ -38,8 +38,11 @@ models/
 # Large source clips fetched by scripts/make-test-audio-zh.py (regenerated on demand)
 samples/_raw/
 
-# 内网交付打包产物
+# 内网交付打包产物（统一产出到 sdk\ 根；script/out 为历史残留）
 sdk/web/script/out/
+sdk/cpp-napi/script/out/
+sdk/audiotse-intranet-*/
+sdk/audiotse-intranet-*.zip
 
 # Editor directories and files
 .vscode/*
@@ -55,9 +58,8 @@ Thumbs.db
 
 *.wav
 
-# C++ SDK 构建产物与预编译依赖（sdk/cpp）
-sdk/cpp/build*/
-sdk/cpp/third_party/
-
-# N-API addon 构建产物（sdk/cpp-napi）
+# C++/N-API SDK 构建产物与预编译依赖（sdk/cpp-napi 自包含构建根）
 sdk/cpp-napi/build*/
+sdk/cpp-napi/third_party/
+
+.zcode/

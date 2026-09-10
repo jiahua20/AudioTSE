@@ -34,7 +34,7 @@ renderer/         纯静态页面（无构建链）：AudioWorklet 采麦 16k、
 
 - 采集：`AudioContext({sampleRate:16000})` 让浏览器重采样到 16k，AudioWorklet 聚
   100ms 块经 IPC 发主进程（Float32Array 结构化克隆直达）。
-- 推理在主进程（onnxruntime-node 原生 + sherpa-onnx WASM），渲染进程零依赖。
+- 推理在主进程（sherpa-onnx-node 原生：VAD + 声纹同运行时），渲染进程零依赖。
 - 已知局限：扬声器回放会被麦克风再次拾入（演示未做回声消除，可戴耳机）；
   重叠语音时门控只能整段放行/拒绝，真分离要等 TSE 接入。
 

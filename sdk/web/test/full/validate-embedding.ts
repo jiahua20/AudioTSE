@@ -1,10 +1,11 @@
 // 对拍验证（两层）：
-// 1. 特征级：本包 computeFbank vs torchaudio 参考特征（test/fixtures/ref_fbank_*.npy，
-//    由 test/tools/make_reference_fbank.py 生成），逐元素比 max|diff|。参数已按
-//    sherpa-onnx 源码固定（25/10ms、povey、dither=0、低频 20Hz、无能量维），
-//    唯一待裁决的是 mel 滤波器归一化方式，这里扫三种。
-// 2. 声纹级：特征级胜出组合 + global-mean 归一（模型元数据要求）跑 ONNX，
-//    与 sherpa_onnx Python 参考声纹比余弦，应 ≈1.0。
+// 1. 特征级：computeFbank vs torchaudio 参考特征（test/fixtures/ref_fbank_*.npy，
+//    由 test/tools/make_reference_fbank.py 生成），逐元素比 max|diff|。fbank 已不在
+//    SDK 数据路径上（声纹改走 sherpa SpeakerEmbeddingExtractor），本层校验该独立
+//    工具本身的正确性。
+// 2. 声纹级：sherpa-onnx-node 的 SpeakerEmbeddingExtractor 跑 ER2Net，与
+//    sherpa_onnx Python 参考声纹比余弦，应 ≈1.0（即与迁移前 fbank+onnxruntime
+//    路径一致，两者已互拍 cos=1.0）。
 // 用法：npm run validate（在 sdk/web 下）
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -64,7 +65,7 @@ function maxAbsDiff(a: Float32Array, b: Float32Array): number {
 
 async function main(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const sherpa = require('sherpa-onnx')
+  const sherpa = require('sherpa-onnx-node')
 
   function loadWav(name: string): Float32Array {
     const wave = sherpa.readWave(path.join(SAMPLES, `${name}.wav`))
@@ -102,13 +103,13 @@ async function main(): Promise<void> {
   }
   console.log(`胜出 melNorm=${winner.melNorm}（max|diff|=${winner.worst.toExponential(3)}，浮点抖动范围）\n`)
 
-  // ── 第二层：声纹级余弦对拍（global-mean + ONNX）─────────────────────────
-  console.log('== 声纹级对拍（TS embedder vs sherpa_onnx Python 参考声纹）==')
-  const embedder = await SpeakerEmbedder.create(SPEAKER_MODEL) // 默认 global-mean
+  // ── 第二层：声纹级余弦对拍（sherpa SpeakerEmbeddingExtractor）────────────
+  console.log('== 声纹级对拍（sherpa extractor vs sherpa_onnx Python 参考声纹）==')
+  const embedder = await SpeakerEmbedder.create(SPEAKER_MODEL)
   const sims: number[] = []
   for (const name of EMBED_NAMES) {
     const t0 = Date.now()
-    const embedding = await embedder.embed(loadWav(name), { melNorm: winner.melNorm })
+    const embedding = await embedder.embed(loadWav(name))
     const ms = Date.now() - t0
     const ref = readNpy(path.join(FIXTURES, `ref_emb_${name}.npy`))
     const cos = cosine(embedding, ref)

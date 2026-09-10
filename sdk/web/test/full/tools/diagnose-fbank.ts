@@ -19,7 +19,7 @@ function readNpy(file: string): Float32Array {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const sherpa = require('sherpa-onnx')
+const sherpa = require('sherpa-onnx-node')
 const wave = sherpa.readWave(path.join(SAMPLES, 'enroll_target.wav'))
 const mine = computeFbank(wave.samples, { melNorm: 'raw' })
 const ref = readNpy(path.join(FIXTURES, 'ref_fbank_enroll_target.npy'))

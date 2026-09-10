@@ -3,7 +3,7 @@ import { createSileroVad } from '../../../src/full/vad'
 
 const ROOT = path.resolve(__dirname, '..', '..', '..', '..', '..')
 const VAD_MODEL = path.join(ROOT, 'app', 'models', 'silero_vad', 'silero_vad.onnx')
-const sherpa = require('sherpa-onnx')
+const sherpa = require('sherpa-onnx-node')
 const target = sherpa.readWave(path.join(ROOT, 'app/samples/target_clean.wav')).samples
 
 function drain(v: ReturnType<typeof createSileroVad>): number[] {

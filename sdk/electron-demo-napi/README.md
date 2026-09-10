@@ -1,24 +1,21 @@
 # 声纹门控最小 Electron Demo（C++ N-API SDK）
 
 与 `sdk/electron-demo-web` 界面与交互完全相同的版本：后端从 web SDK 换成
-**C++ SDK 的 N-API addon**（`sdk/cpp-napi`），主进程直接 `require()` 加载原生
-`.node`——无子进程、无 stdin/stdout 协议，推理在工作线程执行不阻塞主进程。
-N-API ABI 稳定，无需 electron-rebuild。
-
-与 `electron-demo-cpp`（子进程桥接版）的关系：两者都验证 C++ SDK 的 Electron
-接入；本 demo 是进程内直载的推荐形态，子进程版保留作对照（非 Node 宿主仍可用
-gate_stream.exe）。
+**C++ SDK 的 N-API addon**（`sdk/cpp-napi`，自包含构建根），主进程直接 `require()`
+加载原生 `.node`——无子进程、无 stdin/stdout 协议，推理在工作线程执行不阻塞主
+进程。N-API ABI 稳定，无需 electron-rebuild。
 
 架构：渲染进程麦克风采集（AudioWorklet 100ms 块）→ IPC → 主进程 →
 `@audiotse/gate-napi`（原生 VAD+声纹门控）；renderer 与 preload 与 web demo
-逐字节相同——三个 demo 后端可互换。
+逐字节相同——两个 demo 后端可互换。
 
 ## 运行
 
-前置：模型已由 `app/start.ps1` 下载到 `app/models/`（直接复用）。
+前置：模型已由 `app/start.ps1` 下载到 `app/models/`（直接复用；VAD 用
+`silero_vad_v4.onnx`——sherpa 1.12.1 不支持 v5，切段结果与 v5 一致）。
 
 ```powershell
-# 1. 构建 N-API addon（首次会 npm install；sherpa 包与 sdk\cpp 共用）
+# 1. 构建 N-API addon（首次会 npm install；sherpa 1.12.1 包在 cpp-napi\third_party\）
 cd sdk\cpp-napi
 .\build.ps1               # 产出 build\Release\audiotse_gate_napi.node + dll
 
@@ -49,5 +46,5 @@ test-gate-napi.js        SDK 级自检（样例 wav 全链路，纯 Node 即可�
 ```
 
 - 与 web demo 主进程的唯一区别：`require('../../web')` → `require('../../cpp-napi')`。
-- 段音频以 float32 原始精度回传（子进程版是 int16 量化）。
+- 段音频以 float32 原始精度回传。
 - 已知局限同 web demo：无回声消除（可戴耳机）；重叠语音只能整段放行/拒绝。

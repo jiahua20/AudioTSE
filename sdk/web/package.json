@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:umd": "node script/build-umd.js",
     "validate": "tsx test/full/validate-embedding.ts",
     "test": "tsx test/full/gate-e2e.ts",
     "test:core": "tsx test/core/filter-e2e.ts"
@@ -24,8 +25,8 @@
     "node": ">=18.20"
   },
   "dependencies": {
-    "onnxruntime-node": "^1.20.1",
-    "sherpa-onnx": "^1.13.7"
+    "sherpa-onnx-node": "1.12.1",
+    "sherpa-onnx-win-x64": "1.12.1"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",

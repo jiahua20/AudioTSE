@@ -35,6 +35,13 @@ MODELS = {
         "url": f"{BASE_URL}/asr-models/silero_vad.onnx",
         "marker": "silero_vad.onnx",
     },
+    "vad-v4": {
+        # silero v4：sdk/web 依赖的 sherpa-onnx-node 1.12.1（与内网项目同版本）不支持
+        # v5；实测 v4/v5 在本工程样例上切分结果一致（start=1984/97728 逐位相同）
+        "directory": "silero_vad",
+        "url": "https://github.com/snakers4/silero-vad/raw/v4.0/files/silero_vad.onnx",
+        "marker": "silero_vad_v4.onnx",
+    },
     "speaker": {
         "directory": "sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k",
         "url": f"{BASE_URL}/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",

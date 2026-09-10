@@ -8,7 +8,7 @@ const path = require('node:path')
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const { SpeakerGate } = require(path.join(ROOT, 'sdk', 'cpp-napi'))
-const VAD = path.join(ROOT, 'app', 'models', 'silero_vad', 'silero_vad.onnx')
+const VAD = path.join(ROOT, 'app', 'models', 'silero_vad', 'silero_vad_v4.onnx')
 const SPEAKER = path.join(
   ROOT,
   'app',

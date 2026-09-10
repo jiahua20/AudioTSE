@@ -1,12 +1,17 @@
 # @audiotse/gate — AudioTSE 声纹门控 SDK（单包双入口）
 
-一个 npm 包，两个入口，同一套声纹内核（fbank 前端 + ER2Net ONNX，与 sherpa-onnx
-Python 引擎对拍 cos≥0.9999）：
+一个 npm 包，两个入口，同一套声纹内核（sherpa-onnx-node 的 SpeakerEmbeddingExtractor
++ ER2Net，与 sherpa-onnx Python 引擎对拍 cos≥0.9999）：
 
 | 入口 | 用途 | 额外依赖 |
 |---|---|---|
-| `@audiotse/gate`（主入口） | 完整版：自带 silero VAD 切段 + 声纹门控，从原始音频流开始处理 | sherpa-onnx（WASM VAD） |
-| `@audiotse/gate/core` | **内网场景**：外部已有 VAD，只要「注册 + 声纹判定/过滤」 | 仅 onnxruntime-node |
+| `@audiotse/gate`（主入口） | 完整版：自带 silero VAD 切段 + 声纹门控，从原始音频流开始处理 | 无（与 core 共用 sherpa-onnx-node） |
+| `@audiotse/gate/core` | **内网场景**：外部已有 VAD，只要「注册 + 声纹判定/过滤」 | 无（仅 sherpa-onnx-node 1.12.1） |
+
+> 推理运行时统一为 **sherpa-onnx-node 1.12.1**（原生 N-API，与内网项目同版本，
+> 进程内共用同一份 onnxruntime，无 dll 冲突；完整版的 VAD 用 silero **v4** 模型——
+> 1.12.1 不支持 v5，两者切分结果实测逐位一致）。迁移前用 onnxruntime-node +
+> sherpa-onnx WASM，因与内网项目自带的 onnxruntime.dll 同名冲突（Windows 193）而替换。
 
 ```bash
 # 本包独立安装与构建（本目录）
@@ -26,7 +31,7 @@ npm test            # full 端到端（短注册/轮流发言/重叠语音）
 
 - 输入：`Float32Array`，16 kHz 单声道，取值 [-1,1]（业务 VAD 已切好的语音段）
 - 运行环境：Node.js ≥18.20 / Electron 主进程（CommonJS `require`）
-- 推理：onnxruntime-node（CPU），声纹模型 3D-Speaker ER2Net（38 MB）
+- 推理：sherpa-onnx-node（CPU），声纹模型 3D-Speaker ER2Net（38 MB）
 
 ### API
 
@@ -65,28 +70,32 @@ Electron 主进程接入示例见 [`examples/electron-main.example.js`](examples
 一键打包（推荐）：
 
 ```powershell
-powershell -File sdk\web\script\package-intranet.ps1             # 全平台二进制（zip ~140 MB）
-powershell -File sdk\web\script\package-intranet.ps1 -WinOnly   # 只留 Windows x64（zip ~40 MB）
+powershell -File sdk\web\script\package-intranet.ps1    # zip ~42 MB（sherpa-onnx 运行时 + VC++ 库 + 模型）
 ```
 
-产出 `sdk/web/script/out/audiotse-intranet-<时间戳>.zip`，内含 SDK 产物、
-node_modules 运行时闭包、38 MB 声纹模型、样例音频和离线自检脚本
-（解压后 `node smoke-test.js` 验证环境）。手动清点的话需要：
+产出 `sdk/web/script/out/audiotse-intranet-web-<时间戳>.zip`，内含 SDK 产物（**含 UMD
+单文件 `gate/audiotse-gate.umd.js`**，宿主免编译直引一个 js 即可接入，适合自有
+构建管线编不过源码的场景）、sherpa-onnx 原生运行时闭包（**含 app-local 的 VC++
+运行库 DLL，内网机器免装任何运行库**；宿主项目已带 sherpa-onnx-node 时直接共用，
+不会引入第二份 onnxruntime）、38 MB 声纹模型、样例音频和
+离线自检脚本（解压后 `node env-check.js` 查环境、`node smoke-test.js` 验证全链路）。
+手动清点的话需要：
 
 | 内容 | 位置 | 大小 |
 |---|---|---|
-| SDK 产物 | `dist/core/` + `package.json` | ~20 KB |
-| 推理运行时 | `node_modules/onnxruntime-node/` 及其传递依赖（脚本按闭包自动收集） | ~284 MB（裁剪后 ~40 MB） |
+| SDK 产物 | `audiotse-gate.umd.js`（或 `dist/core/`） | ~20 KB |
+| 推理运行时 | `node_modules/sherpa-onnx-node/` + `sherpa-onnx-win-x64/`（均无传递依赖） | ~13 MB |
+| VC++ 运行库 | `node_modules/sherpa-onnx-win-x64/` 内 5 个 DLL（app-local） | ~1 MB |
 | 声纹模型 | `app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx` | 38 MB |
 
 目录摆法（示例）：
 
 ```
 内网项目/
-├── node_modules/onnxruntime-node/       ← 拷贝
-├── vendor/audiotse-gate/                ← dist/core + package.json
-│   └── models/speaker.onnx              ← 38MB 模型
-└── electron/main.js                     ← require('../../vendor/audiotse-gate/dist/core')
+├── node_modules/sherpa-onnx-win-x64/     ← 拷贝（原生模块，构建器需标 external；项目已有则共用）
+├── vendor/audiotse-gate/                 ← audiotse-gate.umd.js（或 dist/core 多文件版）
+│   └── models/speaker.onnx               ← 38MB 模型
+└── electron/main.js                      ← require('../../vendor/audiotse-gate/audiotse-gate.umd.js')
 ```
 
 npm 安装方式（有私服/离线 tgz 时）：`require('@audiotse/gate/core')` 子路径入口；

@@ -11,7 +11,7 @@ import { createSileroVad } from '../../src/full/vad'
 
 const ROOT = path.resolve(__dirname, '..', '..', '..', '..') // 仓库根
 const MODELS = path.join(ROOT, 'app/models')
-const VAD_MODEL = path.join(MODELS, 'silero_vad/silero_vad.onnx')
+const VAD_MODEL = path.join(MODELS, 'silero_vad/silero_vad_v4.onnx')
 const SPEAKER_MODEL = path.join(
   MODELS,
   'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx',
@@ -19,7 +19,7 @@ const SPEAKER_MODEL = path.join(
 const SAMPLES = path.join(ROOT, 'app/samples')
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const sherpa = require('sherpa-onnx')
+const sherpa = require('sherpa-onnx-node')
 
 function loadWav(name: string): Float32Array {
   const wave = sherpa.readWave(path.join(SAMPLES, `${name}.wav`))

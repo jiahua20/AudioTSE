@@ -7,14 +7,14 @@ const ROOT = path.resolve(__dirname, '..', '..', '..')
 
 function loadWav(p: string): Float32Array {
   // @ts-expect-error sherpa-onnx 无类型声明
-  const sherpa = require('sherpa-onnx')
+  const sherpa = require('sherpa-onnx-node')
   const wave = sherpa.readWave(p)
   return wave.samples
 }
 
 async function main() {
   const gate = await SpeakerGate.create({
-    vadModel: path.join(ROOT, 'app/models/silero_vad/silero_vad.onnx'),
+    vadModel: path.join(ROOT, 'app/models/silero_vad/silero_vad_v4.onnx'),
     speakerModel:
       path.join(ROOT,
         'app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx'),

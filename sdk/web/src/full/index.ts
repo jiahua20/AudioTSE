@@ -16,6 +16,5 @@ export {
   type VoiceFilterConfig,
   type JudgeResult,
   type FbankOptions,
-  type FeatureNormalize,
 } from '../core/index'
 export { createSileroVad, DEFAULT_VAD_OPTIONS, type SileroVadOptions, type Vad } from './vad'

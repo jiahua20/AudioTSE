@@ -63,7 +63,8 @@ app.whenReady().then(async () => {
   try {
     const { SpeakerGate } = require(WEB_SDK)
     gate = await SpeakerGate.create({
-      vadModel: path.join(MODELS_DIR, 'silero_vad', 'silero_vad.onnx'),
+      // v4 模型：sherpa-onnx-node 1.12.1（与内网同版本）不支持 v5；两者切分结果一致
+      vadModel: path.join(MODELS_DIR, 'silero_vad', 'silero_vad_v4.onnx'),
       speakerModel: path.join(
         MODELS_DIR,
         'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k',

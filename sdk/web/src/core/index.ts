@@ -6,5 +6,5 @@ export {
   type JudgeResult,
   type EnrollResult,
 } from './voice-filter'
-export { SpeakerEmbedder, type FeatureNormalize } from './embedder'
+export { SpeakerEmbedder } from './embedder'
 export { computeFbank, type FbankOptions } from './fbank'

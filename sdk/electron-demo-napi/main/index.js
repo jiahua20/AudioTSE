@@ -64,7 +64,7 @@ app.whenReady().then(async () => {
   try {
     const { SpeakerGate } = require(NAPI_SDK)
     gate = await SpeakerGate.create({
-      vadModel: path.join(MODELS_DIR, 'silero_vad', 'silero_vad.onnx'),
+      vadModel: path.join(MODELS_DIR, 'silero_vad', 'silero_vad_v4.onnx'),
       speakerModel: path.join(
         MODELS_DIR,
         'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k',

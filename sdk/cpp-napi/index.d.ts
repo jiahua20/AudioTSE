@@ -1,4 +1,4 @@
-// 类型定义与 @audiotse/gate（sdk/web）的主入口同名接口一一对应，
+// 类型定义与 @audiotse/gate（sdk/web）的主入口 / core 入口同名接口一一对应，
 // 宿主代码 import type 切换后端时无需改动。
 export declare const SAMPLE_RATE = 16000
 
@@ -50,6 +50,26 @@ export interface EnrollResult {
   speechSeconds: number
 }
 
+/** core 版配置（无 VAD，内网场景），与 sdk/web 的 VoiceFilterConfig 同名同义 */
+export interface VoiceFilterConfig {
+  /** 3D-Speaker ER2Net onnx 路径（必填） */
+  speakerModel: string
+  /** 放行所需的相似度阈值基准，默认 0.5 */
+  threshold?: number
+  /** 短注册阈值补偿系数，默认 0.7，设 1 禁用 */
+  shortEnrollThresholdFactor?: number
+}
+
+/** 一段语音的判定结果（core 版） */
+export interface JudgeResult {
+  /** 与注册声纹的余弦相似度；未注册时为 1.0 */
+  similarity: number
+  /** 是否目标说话人；未注册时恒为 true */
+  accepted: boolean
+  /** 输入语音时长（秒） */
+  durationSeconds: number
+}
+
 export declare class SpeakerGate {
   /** 加载模型并创建实例（约 0.5s，在工作线程执行不阻塞 JS）。 */
   static create(config: SpeakerGateConfig): Promise<SpeakerGate>
@@ -71,6 +91,24 @@ export declare class SpeakerGate {
   flush(): Promise<GateSegmentEvent[]>
   /** 复位 VAD 与段状态（注册声纹保留）。 */
   reset(): void
+  /** 释放原生资源（排到队列末尾执行）。 */
+  dispose(): void
+}
+
+/** core 版（无 VAD）：外部 VAD 已切好段，只做「注册 → 逐段判定/过滤」。 */
+export declare class VoiceFilter {
+  /** 加载声纹模型并创建实例（约 0.5s，在工作线程执行不阻塞 JS）。 */
+  static create(config: VoiceFilterConfig): Promise<VoiceFilter>
+  /** 是否已注册（未注册时 judge 全部 accepted）。 */
+  get enrolled(): boolean
+  /** 当前实际生效的放行阈值（短注册补偿后）。 */
+  get effectiveThreshold(): number
+  /** 注册目标说话人：一段完整语音（float32 [-1,1] @16k）。 */
+  enroll(samples: Float32Array): Promise<EnrollResult>
+  /** 判定一段语音是否目标说话人。 */
+  judge(samples: Float32Array): Promise<JudgeResult>
+  /** 便捷过滤：目标说话人语音原样返回（同引用），非目标返回 null；未注册全放行。 */
+  filter(samples: Float32Array): Promise<Float32Array | null>
   /** 释放原生资源（排到队列末尾执行）。 */
   dispose(): void
 }

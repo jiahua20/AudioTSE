@@ -49,7 +49,7 @@ async function embedRaw(
 
 async function main() {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const sherpa = require('sherpa-onnx')
+  const sherpa = require('sherpa-onnx-node')
   console.log('sherpa-onnx npm 版本:', sherpa.version)
   const session = await ort.InferenceSession.create(SPEAKER_MODEL, { executionProviders: ['cpu'] })
   console.log('模型输入:', session.inputNames, session.inputMetadata ? '' : '')

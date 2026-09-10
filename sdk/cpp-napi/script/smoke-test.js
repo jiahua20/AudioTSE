@@ -1,13 +1,13 @@
-// 内网交付包离线自检：验证 Node 环境 + onnxruntime 原生库 + 声纹模型三者就绪。
+// 内网交付包（napi 版）离线自检：验证 Node 环境 + 原生 addon + sherpa 运行时 + 模型。
 // 在本包根目录运行：node smoke-test.js
-// 通过标准：三行 ✅ + PASS（任何一步失败会打印原因并以非零码退出）。
+// 通过标准：各行 ✅ + PASS（模型加载 ~0.5s，全程 ~2s）；与 web 版交付包同输入同基准。
 const fs = require('node:fs')
 const path = require('node:path')
-const { VoiceFilter } = require('./gate')
+const { VoiceFilter } = require('./gate-napi')
 
-console.log(`SDK 入口：${require.resolve('./gate')}（UMD 单文件版）`)
+console.log(`SDK 入口：${require.resolve('./gate-napi')}（C++ N-API 版）`)
 
-/** 极简 16k 单声道 PCM16 wav 读取 */
+/** 极简 16k 单声道 PCM16 wav 读取（自备解析：sherpa 的 readWave 在 Electron 28+ 不可用） */
 function readWav(file) {
   const buf = fs.readFileSync(file)
   let offset = 12
@@ -59,8 +59,8 @@ async function main() {
     if (accepted !== c.expect) throw new Error(`判定与预期不符：${c.label}（期望${c.expect ? '放行' : '拒绝'}）`)
   }
 
-  await filter.dispose()
-  console.log('\nPASS：内网环境就绪，可接入业务')
+  filter.dispose()
+  console.log('\nPASS：内网环境就绪，可接入业务（判定基准与 web 版 SDK 完全一致）')
 }
 
 main().catch((error) => {
