@@ -225,4 +225,117 @@ class VoiceFilter {
   }
 }
 
-module.exports = { SpeakerGate, VoiceFilter, SAMPLE_RATE, addonPath }
+// ── StreamGate：窗口门控（流式，无 VAD），API 与 sdk/web 的 core/stream-gate.ts 同签名 ──
+// 给「ASR 边收边转写」的场景：不等整句说完，每积累 hopMs 新音频判一次（判定
+// 上下文 = 最近 contextMs 的滑窗），过则该块立即放行送 ASR（打字机效果）。
+// 窗口阈值默认 0.25：短窗相似度整体低于整句（实测 500ms 裸窗主讲人中位 0.41、
+// 1s 滑窗 0.52，陌生人 ≤0.09），整句判定的 0.5 直接用于窗口会把本人大量误拒，
+// 两种粒度的阈值不可混用。判定经内部 VoiceFilter 串行链执行（C++ 串行约束）。
+class StreamGate {
+  /** @type {import('./index.d').VoiceFilter | null} */
+  #filter = null
+  #disposed = false
+  #threshold = 0.25
+  #context = 0
+  #hop = 0
+  #smoothing = 0.5
+  #silenceRms = 0.01
+  /** 最近 contextMs 的滑窗缓冲（判定上下文） */
+  #buf = new Float32Array(0)
+  /** 距上次判定以来新到的样本量（按 hop 计步） */
+  #pending = 0
+  /** EMA 平滑分（与 threshold 比较）；未推理时 null */
+  #score = null
+  #lastSimilarity = null
+
+  /**
+   * 加载声纹模型并创建实例（模型加载在工作线程执行，约 0.5s）。
+   * @param {import('./index.d').StreamGateConfig} config
+   */
+  static async create(config) {
+    const gate = new StreamGate()
+    gate.#filter = await VoiceFilter.create({ speakerModel: config.speakerModel })
+    gate.#threshold = config.threshold ?? 0.25
+    gate.#context = Math.round(((config.contextMs ?? 1000) / 1000) * SAMPLE_RATE)
+    gate.#hop = Math.round(((config.hopMs ?? 500) / 1000) * SAMPLE_RATE)
+    gate.#smoothing = config.smoothing ?? 0.5
+    gate.#silenceRms = config.silenceRms ?? 0.01
+    return gate
+  }
+
+  /** 是否已注册（未注册时 push 全放行）。 */
+  get enrolled() {
+    this.#assertAlive()
+    return this.#filter.enrolled
+  }
+
+  /** 窗口判定阈值（窗口模式的独立阈值语义，与整句判定的 0.5 无关）。 */
+  get effectiveThreshold() {
+    this.#assertAlive()
+    return this.#threshold
+  }
+
+  /** 整段注册（唤醒词整段，建议净语音 ≥1s）；注册后窗口判定立即生效。 */
+  async enroll(samples) {
+    requireFloat32Array(samples)
+    const result = await this.#filter.enroll(requireFloat32Array(samples))
+    this.#score = null // 换了声纹，平滑状态作废重来
+    return result
+  }
+
+  /**
+   * 喂入一块音频（float32 [-1,1] @16k，典型 500ms），立刻返回该块的放行判定：
+   * accepted=true 即可转发 ASR。静音块跳过推理（静音声纹是乱数）且不送 ASR；
+   * 未注册全放行；凑步中沿用最近一次判定结论。
+   * @returns {Promise<import('./index.d').StreamGateVerdict>}
+   */
+  async push(chunk) {
+    requireFloat32Array(chunk)
+    this.#assertAlive()
+    const silent = rmsOf(chunk) < this.#silenceRms
+    const merged = new Float32Array(this.#buf.length + chunk.length)
+    merged.set(this.#buf)
+    merged.set(chunk, this.#buf.length)
+    this.#buf =
+      merged.length > this.#context ? merged.subarray(merged.length - this.#context) : merged
+    this.#pending += chunk.length
+    if (silent) {
+      return { accepted: false, similarity: null, score: this.#score, silent: true }
+    }
+    if (!this.#filter.enrolled) {
+      this.#pending = 0
+      return { accepted: true, similarity: null, score: null, silent: false }
+    }
+    if (this.#pending < this.#hop) {
+      const accepted = this.#score === null ? true : this.#score >= this.#threshold
+      return { accepted, similarity: this.#lastSimilarity, score: this.#score, silent: false }
+    }
+    this.#pending = 0
+    const { similarity } = await this.#filter.judge(this.#buf)
+    this.#lastSimilarity = similarity
+    this.#score =
+      this.#smoothing > 0 && this.#score !== null
+        ? this.#smoothing * similarity + (1 - this.#smoothing) * this.#score
+        : similarity
+    return { accepted: this.#score >= this.#threshold, similarity, score: this.#score, silent: false }
+  }
+
+  /** 释放原生资源（VoiceFilter 的串行链保证在途调用完成后执行）。 */
+  dispose() {
+    this.#disposed = true
+    if (this.#filter) this.#filter.dispose()
+  }
+
+  #assertAlive() {
+    if (!this.#filter || this.#disposed) throw new Error('gate 已 dispose 或未完成 create')
+  }
+}
+
+/** 块的均方根（静音检测）。 */
+function rmsOf(x) {
+  let acc = 0
+  for (const v of x) acc += v * v
+  return Math.sqrt(acc / x.length)
+}
+
+module.exports = { SpeakerGate, VoiceFilter, StreamGate, SAMPLE_RATE, addonPath }

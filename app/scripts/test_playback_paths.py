@@ -1,8 +1,8 @@
-"""端到端验证：三种处理模式都应回传可播放音频（听实时性）。
+"""端到端验证：各处理模式都应回传可播放音频（听实时性）。
 
-依次切到 passthrough / speaker_gate / tse，各灌 8s mixed.wav，确认每种模式
-都收到二进制音频帧（+ 转写）。passthrough 应近乎全量回传；门控只回传接受段；
-TSE 回传分离音频。
+依次切到 passthrough / tse，各灌 8s mixed.wav，确认每种模式都收到二进制音频帧
+（+ 转写）。passthrough 应近乎全量回传；TSE 回传分离音频。
+（声纹门控已迁端侧：由 app/scripts/test-ondevice-gate.cjs 验证，不走本服务。）
 
 用法：先启动后端（python -m audio_tse.server），再运行本脚本。
 """
@@ -126,10 +126,9 @@ async def main() -> None:
 
         # passthrough 先（最轻、最该全量回传）
         await run_processor(ws, q, "passthrough", mix)
-        await run_processor(ws, q, "speaker_gate", mix)
         await run_processor(ws, q, "tse", mix)
         rt.cancel()
-    print("\n全部通过：三种模式都有可播放音频。")
+    print("\n全部通过：各模式都有可播放音频。")
 
 
 if __name__ == "__main__":

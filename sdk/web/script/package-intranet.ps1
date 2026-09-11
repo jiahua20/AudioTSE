@@ -1,8 +1,8 @@
 ﻿# 内网离线交付打包脚本（web 版）：把声纹过滤 SDK（core 入口）运行所需的一切打成一个 zip。
 # 产出：sdk\audiotse-intranet-web-<时间戳>.zip（与 napi 版 sdk\audiotse-intranet-napi-*.zip
 #       并列，两包同 API 同基准，供内网对照使用；可用 -OutputDir 改输出位置）。
-# 内容：SDK 产物（含 UMD 单文件）+ sherpa-onnx 原生运行时闭包 + VC++ 运行库
-#       + 声纹模型 + 样例音频 + 离线自检脚本。
+# 内容：SDK 产物（cjs/esm/umd 三种模块格式，gate/ 下按目录区分）+ sherpa-onnx 原生运行时闭包
+#       + VC++ 运行库 + 声纹模型 + 样例音频 + 离线自检脚本。
 #
 # 依赖说明：SDK 推理走 sherpa-onnx-node 1.12.1（与内网项目同版本）。宿主项目若已
 # 自带 sherpa-onnx-node，SDK 与其共用同一 onnxruntime 运行时，进程内不会出现第二份
@@ -35,9 +35,10 @@ foreach ($f in @($speakerModel, (Join-Path $samplesDir 'enroll_target.wav'), (Jo
     if (-not (Test-Path $f)) { throw "缺文件：$f" }
 }
 
-# ── 0. UMD 单文件（内网宿主免编译直引；源码见 script/build-umd.js）──
-& node (Join-Path $PSScriptRoot 'build-umd.js')
-if ($LASTEXITCODE -ne 0) { throw "UMD 构建失败" }
+# ── 0. 格式产物（build-formats.js：dist/umd/ UMD 单文件 + dist/esm/ 多文件 ESM[sherpa 已改 default 导入]；
+#      第三种 cjs/ 多文件 = npm run build 的 dist/core）──
+& node (Join-Path $PSScriptRoot 'build-formats.js')
+if ($LASTEXITCODE -ne 0) { throw "格式产物构建失败" }
 
 # ── 准备暂存目录 ────────────────────────────────────────────
 # 默认产出到 sdk\ 根目录（zip + 同名解压目录），所有交付物集中可见；
@@ -46,20 +47,30 @@ if (-not $OutputDir) { $OutputDir = Split-Path (Split-Path $PSScriptRoot -Parent
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 $stage = Join-Path $OutputDir "audiotse-intranet-web-$stamp"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path (Join-Path $stage 'gate\dist'), (Join-Path $stage 'gate\examples'), (Join-Path $stage 'models'), (Join-Path $stage 'samples'), (Join-Path $stage 'node_modules') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $stage 'gate\cjs'), (Join-Path $stage 'gate\esm'), (Join-Path $stage 'gate\umd'), (Join-Path $stage 'examples'), (Join-Path $stage 'models'), (Join-Path $stage 'samples'), (Join-Path $stage 'node_modules') | Out-Null
 
-# ── 1. SDK 产物（core 入口 + UMD 单文件）────────────────────
-Copy-Item -Recurse (Join-Path $webDir 'dist\core') (Join-Path $stage 'gate\dist\')
-Copy-Item (Join-Path $webDir 'examples\*.js') (Join-Path $stage 'gate\examples\')
-Copy-Item (Join-Path $webDir 'dist\umd\audiotse-gate.umd.js'), (Join-Path $webDir 'dist\umd\audiotse-gate.d.ts') (Join-Path $stage 'gate\')
-# 包级 package.json：require('<本包>/gate') 命中 UMD 单文件（多文件版仍可用 dist/core）
+# ── 1. SDK 产物：三种模块格式按目录区分（同一套 API，接法见包内 README）──
+Copy-Item -Recurse (Join-Path $webDir 'dist\core\*') (Join-Path $stage 'gate\cjs')       # CommonJS 多文件（含 .d.ts，require 直用）
+Copy-Item -Recurse (Join-Path $webDir 'dist\esm\core\*') (Join-Path $stage 'gate\esm')   # ES Modules 多文件（import，Vite/Rollup/webpack）
+Copy-Item (Join-Path $webDir 'dist\umd\audiotse-gate.umd.js'), (Join-Path $webDir 'dist\umd\audiotse-gate.d.ts') (Join-Path $stage 'gate\umd\')  # UMD 单文件（<script>/AMD/require）
+# 接入示例放包根 examples/（给人看的，不埋进 SDK 包体；示例内路径按此布局书写）
+Copy-Item (Join-Path $webDir 'examples\*.js') (Join-Path $stage 'examples\')
+# 包级 package.json：require → cjs/，import → esm/（构建器与 Node 各取所需）
 $gatePackageJson = @'
 {
   "name": "audiotse-gate",
-  "version": "0.3.0",
-  "description": "AudioTSE voiceprint gate SDK (core entry, no VAD, sherpa-onnx-node runtime)",
-  "main": "audiotse-gate.umd.js",
-  "types": "audiotse-gate.d.ts"
+  "version": "0.5.0",
+  "description": "AudioTSE voiceprint gate SDK (no VAD; cjs/esm/umd formats, sherpa-onnx-node runtime)",
+  "main": "./cjs/index.js",
+  "types": "./cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./esm/index.d.ts",
+      "import": "./esm/index.js",
+      "require": "./cjs/index.js"
+    },
+    "./*": "./*"
+  }
 }
 '@
 [IO.File]::WriteAllText((Join-Path $stage 'gate\package.json'), $gatePackageJson)
@@ -83,7 +94,9 @@ foreach ($dll in $vcRuntimes) {
 Write-Host ("已内置 VC++ 运行库(app-local)：{0}（版本 {1}）" -f ($vcRuntimes -join ', '), (Get-Item (Join-Path $vcTarget 'vcruntime140.dll')).VersionInfo.FileVersion)
 
 # ── 3. 模型与样例音频 ─────────────────────────────────────
-Copy-Item $speakerModel (Join-Path $stage 'models\speaker.onnx')
+# 模型用全名（源目录名 + .onnx），拿到包一眼可辨是哪个模型，不再叫 speaker.onnx
+$modelFile = 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx'
+Copy-Item $speakerModel (Join-Path $stage "models\$modelFile")
 Copy-Item (Join-Path $samplesDir 'enroll_target.wav'), (Join-Path $samplesDir 'target_clean.wav'), (Join-Path $samplesDir 'other_clean.wav') (Join-Path $stage 'samples\')
 
 # ── 4. 交付说明与离线自检 ─────────────────────────────────

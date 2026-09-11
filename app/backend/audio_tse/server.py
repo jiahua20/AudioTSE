@@ -1,7 +1,9 @@
 # 后端入口：一个单连接单会话的 WebSocket 服务器（ws://127.0.0.1:8765）。
-# 职责：协议编排 —— 接收前端发来的命令（JSON 文本）与音频帧（二进制），
-# 按「纯音频 TSE / 声纹门控 / 原音直通」三条链路之一处理音频，
-# 把分离音频（二进制）、转写（transcript 事件）和性能指标（metrics 事件）推回前端。
+# 职责：协议编排 —— 接收 Electron 主进程发来的命令（JSON 文本）与音频帧（二进制），
+# 按「纯音频 TSE / 原音直通（ASR）」两条链路之一处理音频，
+# 把分离音频（二进制）、转写（transcript 事件）和性能指标（metrics 事件）推回。
+# 声纹门控已迁至端侧（Electron 主进程的 sdk/cpp-napi addon）：门控模式由主进程
+# 判段后只把放行段音频送本服务的直通链路做 ASR（asrFlush 命令收尾每段转写）。
 import asyncio
 import json
 import time
@@ -12,7 +14,6 @@ from websockets.exceptions import ConnectionClosed
 
 from .asr import AsrModel, StreamingAsr
 from .session import AudioSession, SessionError, SessionState
-from .speaker_gate import SpeakerGate
 from .tse import (
     CROSSFADE_SECONDS,
     WINDOW_SECONDS,
@@ -40,14 +41,8 @@ ASR_MODELS = {
         "paraformer",
     ),
 }
-# 声纹门控 / TSE 静音跳过共用的 Silero VAD 模型文件
+# TSE 静音跳过用的 Silero VAD 模型文件
 VAD_MODEL = MODELS_DIR / "silero_vad" / "silero_vad.onnx"
-# 声纹门控用的说话人嵌入模型（3D-Speaker ER2Net，中文）
-SPEAKER_MODEL = (
-    MODELS_DIR
-    / "sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k"
-    / "model.onnx"
-)
 # 实验性纯音频 TSE：WeSep BSRNN + ECAPA，权重约 262 MB（需单独安装）
 TSE_MODEL = TseModel(
     "wesep_bsrnn",
@@ -69,8 +64,6 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         {"id": model.id, "name": model.name, "available": model.available}
         for model in ASR_MODELS.values()
     ]
-    # 声纹门控同时依赖 VAD 和说话人模型，两者都得在
-    gate_available = VAD_MODEL.exists() and SPEAKER_MODEL.exists()
     processors = [
         {
             "id": "tse",
@@ -80,15 +73,9 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             "reason": TSE_MODEL.unavailable_reason,  # 不可用时的提示（如何安装）
         },
         {
-            "id": "speaker_gate",
-            "name": "声纹门控（降级）",
-            "description": "适合轮流说话，重叠语音不能分离",
-            "available": gate_available,
-        },
-        {
             "id": "passthrough",
             "name": "原音直通（诊断）",
-            "description": "不区分说话人，用于比较 ASR 效果",
+            "description": "不区分说话人，用于比较 ASR 效果；端侧门控放行的段也走这条链路识别",
             "available": True,  # 直通只依赖 ASR，永远可选
         },
     ]
@@ -101,16 +88,14 @@ FRAME_MS = (2048 / 16_000) * 1000.0
 HOP_MS = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0
 
 
-def rtf_for(processor: str, tse_ms: float, asr_ms: float, gate_ms: float) -> float | None:
+def rtf_for(processor: str, tse_ms: float, asr_ms: float) -> float | None:
     """Real-Time Factor（实时因子）= 处理时间 / 音频时间。小于 1 表示能跟上实时音频。
 
-    分母按链路取值：TSE 每 hop(0.9s) 处理一次，门控/直通每帧(128ms) 处理一次；
+    分母按链路取值：TSE 每 hop(0.9s) 处理一次，直通每帧(128ms) 处理一次；
     没有任何处理耗时数据时返回 None（前端显示「—」）。"""
     if processor == "tse":
         return (tse_ms + asr_ms) / HOP_MS if (tse_ms or asr_ms) else None
-    # 门控链路的瓶颈是 VAD+声纹（ASR 已包含在 gate 内部）；直通只有 ASR
-    cost = gate_ms if processor == "speaker_gate" else asr_ms
-    return cost / FRAME_MS if cost else None
+    return asr_ms / FRAME_MS if asr_ms else None
 
 
 def metrics_payload(rt: dict, tse, asr, processor: str) -> dict:
@@ -122,7 +107,7 @@ def metrics_payload(rt: dict, tse, asr, processor: str) -> dict:
     # 端到端首字延时 = 从 startExtraction 到第一条转写出现的墙钟差
     if rt["first_text"] is not None:
         e2e = (rt["first_text"] - rt["start"]) * 1000.0
-    rtf = rtf_for(processor, tse_ms, asr_ms, rt["gate_ms"])
+    rtf = rtf_for(processor, tse_ms, asr_ms)
     return {
         "processor": processor,                              # 当前链路
         "wallSec": round(now - rt["start"], 2),              # 提取已运行的墙钟秒数
@@ -140,17 +125,13 @@ def metrics_payload(rt: dict, tse, asr, processor: str) -> dict:
 async def handle(websocket: ServerConnection) -> None:
     """单个 WebSocket 连接的完整生命周期：每个连接一套独立的会话/模型实例。"""
     session = AudioSession()  # 本连接的状态机 + 注册音频缓冲
-    # rt：本轮提取的实时统计（start 起点时间、首字时间、累计音频秒数、上次 metrics 发送时刻、门控耗时）
-    rt = {"start": 0.0, "first_text": None, "audio": 0.0, "last_send": 0.0, "gate_ms": 0.0}
-    # 连接建立时的默认选择：优先 Paraformer；TSE 可用选 TSE，否则声纹门控，最后直通
+    # rt：本轮提取的实时统计（start 起点时间、首字时间、累计音频秒数、上次 metrics 发送时刻）
+    rt = {"start": 0.0, "first_text": None, "audio": 0.0, "last_send": 0.0}
+    # 连接建立时的默认选择：优先 Paraformer；TSE 可用选 TSE，否则直通
+    # （声纹门控是端侧链路，由 Electron 主进程注入到选项列表，后端不感知）
     selected_asr = "paraformer" if ASR_MODELS["paraformer"].available else "zipformer"
-    selected_processor = (
-        "tse"
-        if TSE_MODEL.available
-        else "speaker_gate" if VAD_MODEL.exists() and SPEAKER_MODEL.exists() else "passthrough"
-    )
+    selected_processor = "tse" if TSE_MODEL.available else "passthrough"
     asr: StreamingAsr | None = None            # 当前活跃的 ASR（startExtraction 时创建）
-    gate: SpeakerGate | None = None            # 声纹门控链路实例（同上）
     tse: BufferedWeSepTse | None = None        # TSE 链路实例（同上）
     # 会话级共享引擎：BSRNN 权重（约 262 MB）只加载一次，之后换人 / 停止
     # 再提取都复用，省掉每次 startExtraction 重新 load_model_local 的开销。
@@ -241,19 +222,11 @@ async def handle(websocket: ServerConnection) -> None:
                                 text, final = await asyncio.to_thread(asr.accept_pcm16, target_pcm16)
                                 await send(websocket, "transcript", text=text, final=final)
                                 text_emitted = text_emitted or bool(text)
-                        elif gate:
-                            # 链路 2：声纹门控。VAD 切段 + 声纹判定，只把「像目标人」
-                            # 的段喂 ASR；返回增量转写事件 + 放行的音频块
-                            g_start = time.perf_counter()
-                            events, audio_chunks = await asyncio.to_thread(gate.accept_pcm16, message)
-                            for pcm in audio_chunks:
-                                await websocket.send(pcm)  # 放行的音频回传播放
-                            for tr in events:
-                                await send(websocket, "transcript", **tr)
-                                text_emitted = text_emitted or bool(tr.get("text"))
-                            rt["gate_ms"] = (time.perf_counter() - g_start) * 1000.0
                         elif asr:
-                            # 链路 3：原音直通。不筛选，原帧回传 + 直接识别
+                            # 链路 2：原音直通。不筛选，原帧回传 + 直接识别。
+                            # （端侧门控模式也走这里：主进程只把放行段音频送来，
+                            #   段尾跟一条 asrFlush 命令收尾该段转写；直通回传的
+                            #   原帧由主进程按需丢弃，不回传播放。）
                             await websocket.send(message)  # 原音直通：回传原始帧供前端播放（听实时性）
                             text, final = await asyncio.to_thread(asr.accept_pcm16, message)
                             await send(websocket, "transcript", text=text, final=final)
@@ -292,7 +265,6 @@ async def handle(websocket: ServerConnection) -> None:
                     selected_asr = requested_asr
                     selected_processor = requested_processor
                     asr = None   # 丢弃旧链路实例，下次 startExtraction 按新选择重建
-                    gate = None
                     tse = None
                     await send(
                         websocket,
@@ -310,13 +282,8 @@ async def handle(websocket: ServerConnection) -> None:
                     if not model.available:
                         raise SessionError("所选 ASR 模型尚未安装")
                     asr = StreamingAsr(model)  # 所有链路都需要 ASR
-                    gate = None
                     tse = None
-                    if selected_processor == "speaker_gate":
-                        # 门控链路：注册声纹来自本会话累积的 enrollment
-                        gate = SpeakerGate(asr, VAD_MODEL, SPEAKER_MODEL)
-                        gate.enroll_pcm16(bytes(session.enrollment))
-                    elif selected_processor == "tse":
+                    if selected_processor == "tse":
                         try:
                             # 引擎连接级预加载（见 kick_tse_preload）；这里多半已就绪，
                             # 万一还没好（注册特别快、加载还没跑完）就等它收尾。
@@ -329,7 +296,15 @@ async def handle(websocket: ServerConnection) -> None:
                             raise SessionError(f"WeSep TSE 加载失败：{error}") from error
                     session.start_extraction()  # 状态机进入 EXTRACTING
                     rt.update(start=time.perf_counter(), first_text=None,  # 重置本轮指标
-                              audio=0.0, last_send=0.0, gate_ms=0.0)
+                              audio=0.0, last_send=0.0)
+                elif command == "asrFlush":
+                    # 端侧门控的一段放行音频已全部送完：冲刷 ASR 出该段 final 转写，
+                    # 并换新识别流（下一段从空上下文开始，转写不串段）
+                    if asr is not None and session.state == SessionState.EXTRACTING:
+                        tail = await asyncio.to_thread(asr.finish, asr._stream)
+                        if tail:
+                            await send(websocket, "transcript", text=tail, final=True)
+                        asr._stream = asr.create_stream()
                 elif command == "stopExtraction":
                     # 停止提取：状态机回 READY（注册声纹保留，可再开）
                     session.stop_extraction()
@@ -345,7 +320,6 @@ async def handle(websocket: ServerConnection) -> None:
                         if tail:
                             await send(websocket, "transcript", text=tail, final=True)
                     asr = None   # 释放本轮链路实例（引擎保留，供下次复用）
-                    gate = None
                     tse = None
                 else:
                     raise SessionError("未知命令")

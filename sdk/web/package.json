@@ -16,7 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "build:umd": "node script/build-umd.js",
+    "build:formats": "node script/build-formats.js",
     "validate": "tsx test/full/validate-embedding.ts",
     "test": "tsx test/full/gate-e2e.ts",
     "test:core": "tsx test/core/filter-e2e.ts"

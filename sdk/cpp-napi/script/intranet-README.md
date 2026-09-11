@@ -10,13 +10,13 @@
 
 ```
 gate-napi/             SDK 本体（require('<本包>/gate-napi') 即入口）
-  index.js             JS 包装（VoiceFilter，API 与 web 版 core 入口同签名）
+  index.js             JS 包装（VoiceFilter 整段判定 + StreamGate 流式窗口门控，API 与 web 版 core 入口同签名）
   index.d.ts           配套类型声明
   native/              audiotse_gate_napi.node + sherpa-onnx 1.12.1 运行时 dll
                        + app-local VC++ 运行库（免安装）
-  examples/            electron-main.example.js（Electron 主进程接线）
-                       intranet-wake-flow.js（唤醒词注册+提问过滤可跑演示）
-models/speaker.onnx    3D-Speaker ER2Net 声纹模型（38 MB，与 web 包同一份）
+examples/              electron-main.example.js（Electron 主进程接线示例，路径按本包布局可直接用）
+models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx
+                       3D-Speaker ER2Net 声纹模型（38 MB，与 web 包同一份）
 samples/               样例音频（自检脚本用，接入后可删）
 env-check.js           离线自检（第一步）：node env-check.js
 smoke-test.js          离线自检（第二步）：node smoke-test.js
@@ -27,24 +27,52 @@ README.md              本文件
 
 ```powershell
 node env-check.js    # 运行环境架构 + addon 二进制完整性 + 依赖 DLL 逐个解析
-node smoke-test.js   # 全链路自检（与 web 包同输入同基准：0.582 放行 / -0.044 拒绝）
+node smoke-test.js   # 全链路自检（与 web 包同输入同基准：0.582 放行 / -0.044 拒绝；含 500ms 流式窗口门控）
 ```
 
 ## 接入（Electron 主进程）
 
 ```js
-// 与 web 版唯一区别：require 路径（API 完全同名同签名，业务代码可一行切换）
-const { VoiceFilter } = require('../vendor/gate-napi')
+// 与 web 版唯一区别：require 路径（API 完全同名同签名，业务代码可一行切换）。
+// 下方以包根为视角；拷入业务工程后改成实际摆放路径，如 vendor 布局：require('../vendor/gate-napi')
+const { VoiceFilter } = require('./gate-napi')
 
-const filter = await VoiceFilter.create({ speakerModel: '…/models/speaker.onnx', threshold: 0.5 })
+const filter = await VoiceFilter.create({ speakerModel: '…/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx', threshold: 0.5 })
 
 await filter.enroll(wakeWordSamples)                    // 每次唤醒都重新注册
 const speech = await filter.filter(samples)             // 主讲人语音（原引用）或 null
 const { similarity, accepted } = await filter.judge(samples)  // 要相似度时用
 ```
 
-完整可跑流程见 `gate-napi/examples/intranet-wake-flow.js`；Electron IPC 接线见
-`gate-napi/examples/electron-main.example.js` 与仓库 `sdk/electron-demo-napi`。
+### 流式窗口门控（StreamGate）—— ASR 打字机场景
+
+ASR 边收边转写（打字机效果）等不了整句说完，用 **StreamGate：每 500ms 判一次，过则
+该块立即送 ASR**（API 与 web 版同名同签名，窗口逻辑在 JS 包装层实现，推理走 C++ addon）：
+
+```js
+const { StreamGate } = require('./gate-napi')
+
+const sg = await StreamGate.create({
+  speakerModel: '…/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx',
+  threshold: 0.25,   // 窗口模式独立阈值（默认即 0.25）：短窗相似度整体低于整句，
+                     // 整句判定的 0.5 用在窗口上会把本人大量误拒，两种阈值不可混用
+})
+await sg.enroll(wakeWordSamples)               // 注册不变：唤醒词整段
+
+// 之后每个 500ms 音频块到达即判即转：
+const verdict = await sg.push(chunk500ms)      // { accepted, similarity, score, silent }
+if (verdict.accepted) asrFeed(chunk500ms)      // 过 → 立即喂 ASR；不过 → 丢弃该块
+```
+
+行为与调参（与 web 版完全一致）：滑窗判定（hopMs 500ms 出结论、contextMs 最近 1s 作
+判定上下文，不重复发送、不增加延迟）；EMA 平滑（smoothing 0.5，说话人切换约 1~2 窗
+翻转，0 = 每窗硬判）；静音直拒（RMS < silenceRms 0.01 跳过推理）；未注册全放行。
+实测单窗判定约 60ms（libuv 工作线程，不阻塞主进程）；包内 `node smoke-test.js`
+第 4 步即此模式。
+
+Electron IPC 接线（唤醒词注册 + 提问过滤）见 `examples/electron-main.example.js`，
+路径已按本包布局写好；端到端验证直接跑包内 `node smoke-test.js`；仓库 `sdk/electron-demo-napi`
+为含 preload/renderer 与麦克风采集的完整最小 Demo。
 
 ## web 版 / napi 版对照说明
 

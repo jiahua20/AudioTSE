@@ -33,16 +33,17 @@ if (-not $OutputDir) { $OutputDir = Split-Path (Split-Path $PSScriptRoot -Parent
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 $stage = Join-Path $OutputDir "audiotse-intranet-napi-$stamp"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force -Path (Join-Path $stage 'gate-napi\examples'), (Join-Path $stage 'gate-napi\native'), (Join-Path $stage 'models'), (Join-Path $stage 'samples') | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $stage 'gate-napi'), (Join-Path $stage 'gate-napi\native'), (Join-Path $stage 'examples'), (Join-Path $stage 'models'), (Join-Path $stage 'samples') | Out-Null
 
 # ── 1. SDK 包装层（index.js 会自动探测 native/ 下的 .node）──
 Copy-Item (Join-Path $root 'index.js'), (Join-Path $root 'index.d.ts') (Join-Path $stage 'gate-napi\')
-Copy-Item (Join-Path $root 'examples\*.js') (Join-Path $stage 'gate-napi\examples\')
+# 接入示例放包根 examples/（给人看的，不埋进 SDK 包体；示例内路径按此布局书写）
+Copy-Item (Join-Path $root 'examples\*.js') (Join-Path $stage 'examples\')
 $gatePackageJson = @'
 {
   "name": "audiotse-gate-napi",
-  "version": "0.3.0",
-  "description": "AudioTSE voiceprint gate SDK (C++ N-API addon, core entry, intranet delivery)",
+  "version": "0.4.0",
+  "description": "AudioTSE voiceprint gate SDK (C++ N-API addon; segment judge + streaming window gate, intranet delivery)",
   "main": "index.js",
   "types": "index.d.ts"
 }
@@ -66,7 +67,9 @@ foreach ($dll in $vcRuntimes) {
 Write-Host ("已内置 VC++ 运行库(app-local)：{0}（版本 {1}）" -f ($vcRuntimes -join ', '), (Get-Item (Join-Path $vcTarget 'vcruntime140.dll')).VersionInfo.FileVersion)
 
 # ── 3. 模型与样例音频 ─────────────────────────────────────
-Copy-Item $speakerModel (Join-Path $stage 'models\speaker.onnx')
+# 模型用全名（源目录名 + .onnx），拿到包一眼可辨是哪个模型，不再叫 speaker.onnx
+$modelFile = 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx'
+Copy-Item $speakerModel (Join-Path $stage "models\$modelFile")
 Copy-Item (Join-Path $samplesDir 'enroll_target.wav'), (Join-Path $samplesDir 'target_clean.wav'), (Join-Path $samplesDir 'other_clean.wav') (Join-Path $stage 'samples\')
 
 # ── 4. 交付说明与离线自检 ─────────────────────────────────

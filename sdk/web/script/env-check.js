@@ -103,7 +103,7 @@ console.log('\n== 原生模块加载 + 模型推理 ==')
 try {
   const { SpeakerEmbeddingExtractor } = require(path.join(__dirname, 'node_modules', 'sherpa-onnx-node'))
   const extractor = new SpeakerEmbeddingExtractor({
-    model: path.join(__dirname, 'models', 'speaker.onnx'),
+    model: path.join(__dirname, 'models', 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx'),
     numThreads: 1,
     provider: 'cpu',
     debug: 0,

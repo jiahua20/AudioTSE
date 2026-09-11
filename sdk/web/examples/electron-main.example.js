@@ -5,20 +5,25 @@
 //      （每次唤醒都调用一次 enroll 重新注册，声纹始终是最近唤醒的人）
 //   2. 唤醒之后的提问/其他语音走过滤（judge/filter），只回传主讲人语音，不再注册
 //
-// 引入方式二选一（详见 README 交付清单）：
-//   1) 目录拷贝：const { VoiceFilter } = require('../../vendor/audiotse-gate/dist/core')
-//   2) npm 安装本包：const { VoiceFilter } = require('@audiotse/gate/core')
-// 可跑的完整流程演示（不依赖 Electron）见同目录 intranet-wake-flow.js。
+// 本文件位于交付包 examples/ 下（与 gate/、models/ 平级），路径即按此布局书写，
+// 包内直接可用：
+//   const { VoiceFilter } = require('../gate')    // CommonJS：包 main → gate/cjs/（多文件）
+//   path.join(__dirname, '..', 'models', 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx')
+// 三种模块格式按目录区分（同一套 API，按接法选）：cjs/（require，Node/Electron 主进程
+// 默认）、esm/（import，Vite/Rollup/webpack 等构建器）、umd/（<script>/AMD/require）。
+// 拷进业务工程时改这两处路径即可（如 vendor 布局）。
+//
+// main.js（Electron 主进程）：
 const path = require('node:path')
-const { VoiceFilter } = require('../../vendor/audiotse-gate/dist/core')
 const { app, ipcMain } = require('electron')
+const { VoiceFilter } = require('../gate') // 包 main → gate/cjs/（多文件 CommonJS）
 
 let filter = null
 
 app.whenReady().then(async () => {
   // 初始化一次，全应用复用（加载模型约 0.5s）
   filter = await VoiceFilter.create({
-    speakerModel: path.join(__dirname, '..', 'vendor', 'models', 'speaker.onnx'),
+    speakerModel: path.join(__dirname, '..', 'models', 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx'),
     threshold: 0.5,
     shortEnrollThresholdFactor: 0.7, // 唤醒词四个音节 ~1s，短注册自动降阈值为 0.35
   })
@@ -49,3 +54,18 @@ ipcMain.on('voice:segment', async (_event, samples) => {
 app.on('before-quit', () => {
   filter?.dispose()
 })
+
+// ── ASR 打字机场景：流式窗口门控（StreamGate）──────────────────────
+// ASR 边收边转写（打字机）等不了整句说完时，改用 StreamGate：每 500ms 判一次，
+// 过则该块立即送 ASR；注册不变（仍是唤醒词整段）。窗口阈值默认 0.25——短窗相似度
+// 整体低于整句，整句判定的 0.5 不可用于窗口模式。详见包内 README「流式窗口门控」。
+//
+// const { StreamGate } = require('../gate')
+// const sg = await StreamGate.create({
+//   speakerModel: path.join(__dirname, '..', 'models', 'sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx'),
+// })
+// await sg.enroll(wakeWordSamples)
+// ipcMain.on('voice:chunk', async (_event, chunk500ms) => {
+//   const verdict = await sg.push(chunk500ms)   // { accepted, similarity, score, silent }
+//   if (verdict.accepted) asrFeed(chunk500ms)   // 过 → 立即喂 ASR；不过 → 丢弃该块
+// })

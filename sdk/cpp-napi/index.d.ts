@@ -112,3 +112,57 @@ export declare class VoiceFilter {
   /** 释放原生资源（排到队列末尾执行）。 */
   dispose(): void
 }
+
+/**
+ * 窗口门控配置（流式，无 VAD），与 sdk/web 的 StreamGateConfig 同名同义：
+ * 给「ASR 边收边转写」的场景——每积累 hopMs 新音频判一次，过则该块立即放行送 ASR。
+ */
+export interface StreamGateConfig {
+  /** 3D-Speaker ER2Net onnx 路径（必填） */
+  speakerModel: string
+  /**
+   * 窗口判定阈值，默认 0.25。短窗相似度整体低于整句（实测 500ms 裸窗主讲人中位
+   * 0.41、1s 滑窗 0.52，陌生人 ≤0.09），整句判定的 0.5 在窗口模式下会大量误拒
+   * 本人，两种粒度的阈值不可混用。
+   */
+  threshold?: number
+  /** 判定上下文长度（毫秒）：每次判定看最近这么长的音频，默认 1000 */
+  contextMs?: number
+  /** 判定步长（毫秒）：每积累这么长新音频判一次，默认 500（与喂入块大小一致） */
+  hopMs?: number
+  /** EMA 平滑系数（0~1）：越大越跟手、越小越稳；0 关闭平滑，默认 0.5 */
+  smoothing?: number
+  /** 静音块 RMS 门限：低于它的块跳过推理（静音的声纹是乱数），默认 0.01 */
+  silenceRms?: number
+}
+
+/** 一个喂入块的窗口门控判定。 */
+export interface StreamGateVerdict {
+  /** 该块是否放行（送 ASR）。未注册时放行；静音块拒绝 */
+  accepted: boolean
+  /** 本窗原始相似度；未注册或静音（未推理）时为 null */
+  similarity: number | null
+  /** 平滑后的判定分（与 threshold 比较）；未推理时为 null */
+  score: number | null
+  /** 该块是否被判为近静音（跳过了推理，无需送 ASR） */
+  silent: boolean
+}
+
+/** 窗口门控（流式，无 VAD）：不等整句，按 hopMs 节奏逐块放行/拒绝（打字机场景）。 */
+export declare class StreamGate {
+  /** 加载声纹模型并创建实例（约 0.5s，在工作线程执行不阻塞 JS）。 */
+  static create(config: StreamGateConfig): Promise<StreamGate>
+  /** 是否已注册（未注册时 push 全放行）。 */
+  get enrolled(): boolean
+  /** 窗口判定阈值（窗口模式的独立阈值语义，与整句判定的 0.5 无关）。 */
+  get effectiveThreshold(): number
+  /** 整段注册（唤醒词整段，建议净语音 ≥1s）；注册后窗口判定立即生效。 */
+  enroll(samples: Float32Array): Promise<EnrollResult>
+  /**
+   * 喂入一块音频（float32 [-1,1] @16k，典型 500ms），立刻返回该块的放行判定：
+   * accepted=true 即可转发 ASR。静音块跳过推理且不送 ASR；凑步中沿用最近结论。
+   */
+  push(chunk: Float32Array): Promise<StreamGateVerdict>
+  /** 释放原生资源（排到队列末尾执行）。 */
+  dispose(): void
+}

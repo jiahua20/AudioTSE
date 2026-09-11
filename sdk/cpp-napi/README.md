@@ -5,8 +5,8 @@ Node / Electron 主进程直接 `require()`，**免重编译、免子进程、�
 （native 二进制随包自带）。C++ 源码（src/）与 sherpa 预编译包（third_party/）都在
 本目录——旧 `sdk/cpp`（子进程桥接方式）已并入此处移除。
 
-JS API 与 `sdk/web`（@audiotse/gate）**双入口同名同签名**，宿主代码在 web 版与
-C++ 原生版之间无感切换：
+JS API 与 `sdk/web`（@audiotse/gate）**同名同签名**（SpeakerGate / VoiceFilter /
+StreamGate 三入口），宿主代码在 web 版与 C++ 原生版之间无感切换：
 
 ```js
 // 完整版（VAD 切段 + 门控），对应 @audiotse/gate 主入口
@@ -96,8 +96,9 @@ third_party/           sherpa-onnx 1.12.1 预编译包（gitignore，手动放�
 cmake/sherpa-onnx.cmake sherpa 探测/导入（c-api/cxx-api/onnxruntime 三个 IMPORTED 目标）
 napi/addon.cc          node-addon-api 绑定层（Gate + Filter ObjectWrap + AsyncWorker）
 napi/win_delay_load_hook.cc  延迟加载钩子（Node/Electron 通吃的关键）
-index.js / index.d.ts  JS 包装：SpeakerGate + VoiceFilter 双入口，API 对齐 @audiotse/gate + 串行化
-examples/              intranet-wake-flow.js / electron-main.example.js
+index.js / index.d.ts  JS 包装：SpeakerGate + VoiceFilter + StreamGate（流式窗口门控），
+                       API 对齐 @audiotse/gate + 串行化
+examples/              electron-main.example.js（Electron 主进程接线示例）
 script/                内网打包 + env-check + smoke-test（out/ 为产物，gitignore）
 build.ps1              一键构建（激活 VS → 检查/补齐 sherpa 依赖 → cmake-js）
 ```

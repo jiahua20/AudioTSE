@@ -116,7 +116,8 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', () =>
+   {
   gate?.dispose()
 })
 

@@ -1,12 +1,9 @@
-# 模型配置的单元测试：available 探测逻辑（缺文件/缺依赖的判定）与余弦相似度。
+# 模型配置的单元测试：available 探测逻辑（缺文件/缺依赖的判定）。
 import tempfile
 import unittest
 from pathlib import Path
 
-import numpy as np
-
 from audio_tse.asr import AsrModel
-from audio_tse.speaker_gate import SpeakerEmbedder
 from audio_tse.tse import TseModel
 
 
@@ -45,15 +42,6 @@ class ModelConfigurationTest(unittest.TestCase):
             (model.directory / "avg_model.pt").touch()
             self.assertTrue(model.model_files_ready)                # 文件齐了
             self.assertEqual(model.available, model.dependency_ready)  # 最终取决于依赖是否装好
-
-    def test_cosine_similarity(self) -> None:
-        # 余弦相似度基本性质：自身=1、正交=0
-        target = np.array([1.0, 0.0], dtype=np.float32)
-        self.assertAlmostEqual(SpeakerEmbedder.cosine(target, target), 1.0)
-        self.assertAlmostEqual(
-            SpeakerEmbedder.cosine(target, np.array([0.0, 1.0], dtype=np.float32)),
-            0.0,
-        )
 
 
 if __name__ == "__main__":

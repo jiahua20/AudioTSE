@@ -16,7 +16,7 @@
 ```bash
 # 本包独立安装与构建（本目录）
 npm install
-npm run build       # src → dist（dist/index.js 完整版；dist/core/ 核心版）
+npm run build       # src → dist（dist/index.js 完整版；dist/core/ 核心版；script/build-formats.js 另出 dist/esm 与 dist/umd）
 npm run test:core   # core 端到端
 npm run validate    # 声纹对拍（sherpa extractor vs sherpa Python 引擎，cos≥0.999）
 npm test            # full 端到端（短注册/轮流发言/重叠语音）
@@ -50,11 +50,12 @@ const out = await filter.filter(samples)     // 目标语音原样返回，非�
 - `enroll` 前所有 `judge/filter` 全放行；`filter()` 返回**同一引用**（不拷贝）。
 - 注册语音 <1.5s 时实际阈值自动降为 `threshold × 0.7`（短注册相似度整体下移，
   不补偿会误拒；`filter.effectiveThreshold` 读当前生效值）。
+- ASR 边收边转写（打字机）场景用同入口的 `StreamGate`：每 500ms 判一次、过则该块
+  立即送 ASR（1s 滑窗判定上下文 + EMA 平滑 + 静音直拒）；窗口阈值默认 0.25，短窗
+  相似度整体低于整句，与整句判定的 0.5 不可混用。见 `src/core/stream-gate.ts`。
 
-Electron 主进程接入示例见 [`examples/electron-main.example.js`](examples/electron-main.example.js)；
-完整可跑的流程演示（纯 Node，不依赖 Electron）见
-[`examples/intranet-wake-flow.js`](examples/intranet-wake-flow.js)——在 `sdk/web` 下
-`node examples/intranet-wake-flow.js` 即可复现。
+Electron 主进程接入示例（唤醒词注册 + 提问过滤 IPC 接线）见
+[`examples/electron-main.example.js`](examples/electron-main.example.js)。
 
 ### 唤醒词模式（内网典型接入）
 
@@ -73,9 +74,10 @@ Electron 主进程接入示例见 [`examples/electron-main.example.js`](examples
 powershell -File sdk\web\script\package-intranet.ps1    # zip ~42 MB（sherpa-onnx 运行时 + VC++ 库 + 模型）
 ```
 
-产出 `sdk/web/script/out/audiotse-intranet-web-<时间戳>.zip`，内含 SDK 产物（**含 UMD
-单文件 `gate/audiotse-gate.umd.js`**，宿主免编译直引一个 js 即可接入，适合自有
-构建管线编不过源码的场景）、sherpa-onnx 原生运行时闭包（**含 app-local 的 VC++
+产出 `sdk/web/script/out/audiotse-intranet-web-<时间戳>.zip`，内含 SDK 产物（**三种模块
+格式按目录区分：`gate/cjs/`（多文件 CommonJS，require 直用）、`gate/esm/`（多文件 ESM，
+Vite/Rollup/webpack 构建器——纯 CJS 会被静态分析判「无具名导出」报错）、`gate/umd/`
+（UMD 单文件，`<script>`/AMD/require）**）、sherpa-onnx 原生运行时闭包（**含 app-local 的 VC++
 运行库 DLL，内网机器免装任何运行库**；宿主项目已带 sherpa-onnx-node 时直接共用，
 不会引入第二份 onnxruntime）、38 MB 声纹模型、样例音频和
 离线自检脚本（解压后 `node env-check.js` 查环境、`node smoke-test.js` 验证全链路）。
@@ -83,7 +85,7 @@ powershell -File sdk\web\script\package-intranet.ps1    # zip ~42 MB（sherpa-on
 
 | 内容 | 位置 | 大小 |
 |---|---|---|
-| SDK 产物 | `audiotse-gate.umd.js`（或 `dist/core/`） | ~20 KB |
+| SDK 产物 | `gate/cjs/` + `gate/esm/` + `gate/umd/audiotse-gate.umd.js` | ~40 KB |
 | 推理运行时 | `node_modules/sherpa-onnx-node/` + `sherpa-onnx-win-x64/`（均无传递依赖） | ~13 MB |
 | VC++ 运行库 | `node_modules/sherpa-onnx-win-x64/` 内 5 个 DLL（app-local） | ~1 MB |
 | 声纹模型 | `app/models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k/model.onnx` | 38 MB |
@@ -93,13 +95,15 @@ powershell -File sdk\web\script\package-intranet.ps1    # zip ~42 MB（sherpa-on
 ```
 内网项目/
 ├── node_modules/sherpa-onnx-win-x64/     ← 拷贝（原生模块，构建器需标 external；项目已有则共用）
-├── vendor/audiotse-gate/                 ← audiotse-gate.umd.js（或 dist/core 多文件版）
-│   └── models/speaker.onnx               ← 38MB 模型
-└── electron/main.js                      ← require('../../vendor/audiotse-gate/audiotse-gate.umd.js')
+├── vendor/audiotse-gate/                 ← 三种格式目录（cjs/ esm/ umd/，按接法选）
+│   └── models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx
+│                                         ← 38MB 模型（与交付包 models/ 下同名）
+└── electron/main.js                      ← require('../../vendor/audiotse-gate/cjs')
+                                           或 import '../../vendor/audiotse-gate/esm'（构建器）
 ```
 
 npm 安装方式（有私服/离线 tgz 时）：`require('@audiotse/gate/core')` 子路径入口；
-纯路径引用则 `require('<web包>/dist/core')`。
+纯路径引用则按交付包三目录：`require('<包>/gate/cjs')` / `import '<包>/gate/esm'`。
 
 ### 注意事项
 
@@ -175,5 +179,5 @@ src/full/   vad.ts / speaker-gate.ts（组合 core 的 VoiceFilter + VAD 切段 
 src/index.ts 包主入口 = full；'@audiotse/gate/core' 子路径入口 = src/core
 test/core/  core 端到端（自带极简 wav 读取，不依赖 sherpa）
 test/full/  对拍验证 + 完整版端到端 + Python 参考生成工具
-examples/   intranet-wake-flow.js（唤醒词注册+提问过滤可跑演示）、electron-main.example.js（Electron 接入示例）
+examples/   electron-main.example.js（Electron 主进程接线示例）
 ```

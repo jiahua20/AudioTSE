@@ -7,12 +7,15 @@ export {
   type EnrollProgress,
   type EnrollResult,
 } from './speaker-gate'
-// 核心能力与类型透传（full 用户可直接用 core 的 VoiceFilter）
+// 核心能力与类型透传（full 用户可直接用 core 的 VoiceFilter / StreamGate）
 export {
   VoiceFilter,
+  StreamGate,
   cosine,
   SpeakerEmbedder,
   type VoiceFilterConfig,
   type JudgeResult,
+  type StreamGateConfig,
+  type StreamGateVerdict,
 } from '../core/index'
 export { createSileroVad, DEFAULT_VAD_OPTIONS, type SileroVadOptions, type Vad } from './vad'
