@@ -11,7 +11,10 @@ gate/                  SDK 本体（三种模块格式按目录区分，同一�
   cjs/                 CommonJS 多文件（含 .d.ts）：require 直用，Node/Electron 主进程默认
   esm/                 ES Modules 多文件（含 .d.ts）：import 具名导入，Vite/webpack/Rollup 等构建器
   umd/                 UMD 单文件（audiotse-gate.umd.js）：<script> 全局 / AMD / require 亦兼容
-examples/              electron-main.example.js（Electron 接线示例，路径按本包布局可直接用）
+examples/              流式窗口门控示例 ×3（同一流程，三种导入方式各一个文件）：
+                       electron-main.example.cjs（require gate/cjs，Node/Electron 主进程直用）
+                       electron-main.example.mjs（import gate/esm，Vite/TS 工程，构建器打包）
+                       electron-main.example.umd.js（require gate/umd 单文件，直引一个 js）
 node_modules/          sherpa-onnx 原生运行时闭包（sherpa-onnx-node + win-x64 二进制
                        + app-local VC++ 运行库；宿主项目已带 sherpa-onnx-node 时共用）
 models/sherpa-onnx-3dspeaker-speech-eres2net-base-sv-zh-cn-3dspeaker-16k.onnx
@@ -143,9 +146,9 @@ if (verdict.accepted) asrFeed(chunk500ms)      // 过 → 立即喂 ASR；不过
 - 未注册时全放行（与 VoiceFilter 一致）；实测单窗判定约 60ms，远低于 500ms 步进。
 - 包内 `node smoke-test.js` 第 4 步即此模式：主讲人块全放行、陌生人块全拒绝。
 
-Electron IPC 接线（唤醒词注册 + 提问过滤）见 `examples/electron-main.example.js`（与
-`gate/`、`models/` 平级），路径已按本包布局写好，可直接参照；端到端验证跑包内
-`node smoke-test.js`。
+Electron IPC 接线（唤醒词整段注册 + 500ms 流式块门控送 ASR）见 `examples/` 下三个示例，
+与上方三种格式一一对应（.cjs / .mjs / .umd.js），路径已按本包布局写好，直接抄对应
+自己工程的那份；端到端验证跑包内 `node smoke-test.js`。
 
 ## 注意事项
 

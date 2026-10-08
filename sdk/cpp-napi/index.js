@@ -41,9 +41,38 @@ const addon = require(addonPath)
 /** 固定 16 kHz 单声道（与 C++ SDK kSampleRate 一致） */
 const SAMPLE_RATE = 16000
 
-function requireFloat32Array(samples) {
-  if (!(samples instanceof Float32Array)) {
-    throw new TypeError('音频参数必须是 Float32Array（[-1,1] @16k 单声道）')
+/** embed 输入下限（0.1s）：低于它的音频声纹无意义，且过短输入可能在原生层直接崩进程 */
+const MIN_EMBED_SAMPLES = 1600
+
+/** 报错时描述实际收到的值，帮助定位「IPC 序列化成了普通数组」这类问题 */
+function describeValue(value) {
+  if (value === null || typeof value !== 'object') return `${typeof value} ${JSON.stringify(value)}`
+  const tag = Object.prototype.toString.call(value).slice(8, -1)
+  return tag === 'Object' && value.constructor ? value.constructor.name : tag
+}
+
+/**
+ * 输入校验（类型）：把「原生层直接崩进程」变成带说明的 JS 异常。
+ * 用 Object.prototype.toString 跨 realm 判定（Electron 多上下文下 instanceof 会误判）。
+ */
+function requireFloat32Array(samples, what = '音频参数') {
+  if (Object.prototype.toString.call(samples) !== '[object Float32Array]') {
+    throw new TypeError(
+      `${what}必须是 Float32Array（[-1,1] @16k 单声道），实际收到 ${describeValue(samples)}；` +
+        `经 IPC/序列化传输时请确认对端没有把音频变成普通数组`,
+    )
+  }
+  return samples
+}
+
+/** 输入校验（类型 + 最短时长）：整段送推理的入口（enroll/judge）用。 */
+function requireEmbeddable(samples, what) {
+  requireFloat32Array(samples, what)
+  if (samples.length < MIN_EMBED_SAMPLES) {
+    throw new RangeError(
+      `${what}太短：${samples.length} 样本（约 ${Math.round(samples.length / 16)}ms），` +
+        `至少需要 ${MIN_EMBED_SAMPLES} 样本（0.1s）；长度为 0 多为缓冲区被 transfer 后 detached`,
+    )
   }
   return samples
 }
@@ -180,14 +209,14 @@ class VoiceFilter {
 
   /** 注册目标说话人：一段完整语音（float32 [-1,1] @16k，外部 VAD 已切好）。 */
   async enroll(samples) {
-    requireFloat32Array(samples)
-    return this.#run(() => this.#filter.enroll(requireFloat32Array(samples)))
+    requireEmbeddable(samples, 'enroll 的音频')
+    return this.#run(() => this.#filter.enroll(samples))
   }
 
   /** 判定一段语音是否目标说话人。 */
   async judge(samples) {
-    requireFloat32Array(samples)
-    return this.#run(() => this.#filter.judge(requireFloat32Array(samples)))
+    requireEmbeddable(samples, 'judge 的音频')
+    return this.#run(() => this.#filter.judge(samples))
   }
 
   /**
@@ -277,8 +306,8 @@ class StreamGate {
 
   /** 整段注册（唤醒词整段，建议净语音 ≥1s）；注册后窗口判定立即生效。 */
   async enroll(samples) {
-    requireFloat32Array(samples)
-    const result = await this.#filter.enroll(requireFloat32Array(samples))
+    requireEmbeddable(samples, 'enroll 的音频')
+    const result = await this.#filter.enroll(samples)
     this.#score = null // 换了声纹，平滑状态作废重来
     return result
   }
@@ -290,7 +319,7 @@ class StreamGate {
    * @returns {Promise<import('./index.d').StreamGateVerdict>}
    */
   async push(chunk) {
-    requireFloat32Array(chunk)
+    requireFloat32Array(chunk, 'push 的音频块')
     this.#assertAlive()
     const silent = rmsOf(chunk) < this.#silenceRms
     const merged = new Float32Array(this.#buf.length + chunk.length)

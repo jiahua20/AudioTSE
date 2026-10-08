@@ -15,6 +15,7 @@
 // EMA 平滑吸收单窗抖动（半句话的声纹会漂）：score = a×本窗 + (1-a)×历史，
 // accepted = score ≥ threshold，说话人切换约 1~2 窗内翻转。
 import { VoiceFilter, SAMPLE_RATE } from './voice-filter'
+import { assertFloat32 } from './embedder'
 
 export interface StreamGateConfig {
   /** 声纹模型路径（与 VoiceFilter 同一份 ER2Net onnx） */
@@ -102,6 +103,7 @@ export class StreamGate {
    * 极端大于 hop 的块只做一次判定，判定结论对该块整体生效。
    */
   async push(chunk: Float32Array): Promise<StreamGateVerdict> {
+    assertFloat32(chunk, 'push 的音频块')
     const silent = rms(chunk) < this.silenceRms
     // 追加进滑窗缓冲，只保留最近 contextMs；静音也照常滚动（上下文跨越停顿）
     const merged = new Float32Array(this.buf.length + chunk.length)

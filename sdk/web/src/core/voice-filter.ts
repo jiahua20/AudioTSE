@@ -5,7 +5,7 @@
 //   filter(samples)  便捷过滤：目标说话人的语音原样返回，否则返回 null
 // 声纹提取在 embedder（sherpa SpeakerEmbeddingExtractor 原生实现），
 // 与 sherpa-onnx Python 引擎对拍 cos≥0.9999。
-import { SpeakerEmbedder } from './embedder'
+import { SpeakerEmbedder, assertEmbeddable } from './embedder'
 
 export const SAMPLE_RATE = 16000
 
@@ -85,6 +85,7 @@ export class VoiceFilter {
    * 建议净语音 ≥1s/四个字；<1.5s 自动启用阈值补偿）。
    */
   async enroll(samples: Float32Array): Promise<EnrollResult> {
+    assertEmbeddable(samples, 'enroll 的音频')
     const embedding = await this.embedder.embed(samples)
     let norm = 0
     for (const v of embedding) norm += v * v
@@ -100,6 +101,7 @@ export class VoiceFilter {
 
   /** 判定一段语音是否目标说话人。 */
   async judge(samples: Float32Array): Promise<JudgeResult> {
+    assertEmbeddable(samples, 'judge 的音频')
     const durationSeconds = samples.length / SAMPLE_RATE
     if (this.enrollment === null) {
       return { similarity: 1.0, accepted: true, durationSeconds }

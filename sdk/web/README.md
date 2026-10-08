@@ -54,8 +54,8 @@ const out = await filter.filter(samples)     // 目标语音原样返回，非�
   立即送 ASR（1s 滑窗判定上下文 + EMA 平滑 + 静音直拒）；窗口阈值默认 0.25，短窗
   相似度整体低于整句，与整句判定的 0.5 不可混用。见 `src/core/stream-gate.ts`。
 
-Electron 主进程接入示例（唤醒词注册 + 提问过滤 IPC 接线）见
-[`examples/electron-main.example.js`](examples/electron-main.example.js)。
+Electron 主进程接入示例（流式窗口门控 IPC 接线）见 `examples/` 下三个文件，
+同一流程 × 三种导入方式：`electron-main.example.cjs` / `.mjs` / `.umd.js`。
 
 ### 唤醒词模式（内网典型接入）
 
@@ -179,5 +179,5 @@ src/full/   vad.ts / speaker-gate.ts（组合 core 的 VoiceFilter + VAD 切段 
 src/index.ts 包主入口 = full；'@audiotse/gate/core' 子路径入口 = src/core
 test/core/  core 端到端（自带极简 wav 读取，不依赖 sherpa）
 test/full/  对拍验证 + 完整版端到端 + Python 参考生成工具
-examples/   electron-main.example.js（Electron 主进程接线示例）
+examples/   electron-main.example.{cjs,mjs,umd.js}（流式窗口门控接线示例 ×3，对应三种模块格式）
 ```

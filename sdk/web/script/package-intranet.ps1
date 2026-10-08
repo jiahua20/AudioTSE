@@ -53,8 +53,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage 'gate\cjs'), (Join-P
 Copy-Item -Recurse (Join-Path $webDir 'dist\core\*') (Join-Path $stage 'gate\cjs')       # CommonJS 多文件（含 .d.ts，require 直用）
 Copy-Item -Recurse (Join-Path $webDir 'dist\esm\core\*') (Join-Path $stage 'gate\esm')   # ES Modules 多文件（import，Vite/Rollup/webpack）
 Copy-Item (Join-Path $webDir 'dist\umd\audiotse-gate.umd.js'), (Join-Path $webDir 'dist\umd\audiotse-gate.d.ts') (Join-Path $stage 'gate\umd\')  # UMD 单文件（<script>/AMD/require）
-# 接入示例放包根 examples/（给人看的，不埋进 SDK 包体；示例内路径按此布局书写）
-Copy-Item (Join-Path $webDir 'examples\*.js') (Join-Path $stage 'examples\')
+# 接入示例放包根 examples/（给人看的，不埋进 SDK 包体；同一流式流程 × 三种导入方式）
+Copy-Item (Join-Path $webDir 'examples\*') (Join-Path $stage 'examples\') -Exclude 'README*'
 # 包级 package.json：require → cjs/，import → esm/（构建器与 Node 各取所需）
 $gatePackageJson = @'
 {
