@@ -7,7 +7,7 @@ CPU 优先的实时目标说话人提取桌面原型。Electron/Vue 负责麦克
 ## 技术栈
 
 - 桌面端：Electron、Vue 3、TypeScript、Vite
-- 后端：Python 3.10、WebSocket
+- 后端：Python 3.12、WebSocket
 - 中文 ASR：Sherpa-ONNX Streaming Zipformer 14M INT8
 - 音频格式：16 kHz、单声道、PCM16
 
@@ -32,7 +32,7 @@ CPU 优先的实时目标说话人提取桌面原型。Electron/Vue 负责麦克
 首次使用先创建 Python 环境：
 
 ```powershell
-conda create -n AudioTSE python=3.10 -y
+conda create -n AudioTSE python=3.12 -y
 ```
 
 然后在应用目录（`app/`）运行：

@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="740" height="790" font-family="Microsoft YaHei">
+  <rect x="150" y="36" width="340" height="66" rx="10" fill="#EBF4FF" stroke="#2B6CB0" stroke-width="1.6"/>
+  <text x="320" y="64" font-size="13" fill="#1F2933" text-anchor="middle">麦克风帧（128 ms）→ 输入 FIFO</text>
+  <text x="320" y="86" font-size="12.5" fill="#4A5568" text-anchor="middle">逐帧语音标志同步入队</text>
+
+  <polygon points="320,116 425,160 320,204 215,160" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="320" y="165" font-size="13" fill="#1F2933" text-anchor="middle">攒满 16000 采样？</text>
+
+  <polygon points="320,260 435,310 320,360 205,310" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="320" y="305" font-size="13" fill="#1F2933" text-anchor="middle">语音占比 ＜ 0.05 ？</text>
+  <text x="320" y="327" font-size="12" fill="#4A5568" text-anchor="middle">（式 46）</text>
+
+  <rect x="20" y="440" width="240" height="76" rx="10" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="140" y="471" font-size="12.5" fill="#1F2933" text-anchor="middle">静音窗：原声 × 合成窗</text>
+  <text x="140" y="493" font-size="12.5" fill="#1F2933" text-anchor="middle">零推理直通（式 47）</text>
+
+  <rect x="440" y="440" width="260" height="76" rx="10" fill="#E9F7EE" stroke="#2F855A" stroke-width="1.6"/>
+  <text x="570" y="471" font-size="12.5" fill="#1F2933" text-anchor="middle">BSRNN 单窗分离 × 合成窗</text>
+  <text x="570" y="493" font-size="12.5" fill="#1F2933" text-anchor="middle">（式 29~42）</text>
+
+  <rect x="150" y="570" width="340" height="66" rx="10" fill="#FFFFFF" stroke="#4A5568" stroke-width="1.6"/>
+  <text x="320" y="598" font-size="13" fill="#1F2933" text-anchor="middle">OLA 重叠相加（式 43~45）</text>
+  <text x="320" y="620" font-size="12.5" fill="#4A5568" text-anchor="middle">重叠区两窗权重之和恒为 1</text>
+
+  <rect x="150" y="684" width="340" height="58" rx="10" fill="#E9F7EE" stroke="#2F855A" stroke-width="1.6"/>
+  <text x="320" y="718" font-size="13" fill="#1F2933" text-anchor="middle">出队 0.9 s → 分离音频回放 + 流式识别</text>
+
+  <!-- 守护机制 -->
+  <rect x="560" y="96" width="164" height="112" rx="10" fill="#FFF5F5" stroke="#C53030" stroke-width="1.6"/>
+  <text x="642" y="124" font-size="12.5" font-weight="700" fill="#C53030" text-anchor="middle">守护① 延时有界</text>
+  <text x="642" y="148" font-size="11.5" fill="#1F2933" text-anchor="middle">缓冲 ＞ 24000 ？</text>
+  <text x="642" y="168" font-size="11.5" fill="#1F2933" text-anchor="middle">丢最旧、保最新</text>
+  <text x="642" y="188" font-size="11.5" fill="#4A5568" text-anchor="middle">（式 48）</text>
+  <rect x="560" y="238" width="164" height="112" rx="10" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="642" y="266" font-size="12.5" font-weight="700" fill="#B7791F" text-anchor="middle">守护② 尾部冲刷</text>
+  <text x="642" y="290" font-size="11.5" fill="#1F2933" text-anchor="middle">停止提取 → flush：</text>
+  <text x="642" y="310" font-size="11.5" fill="#1F2933" text-anchor="middle">补零分离、只取真实段</text>
+  <text x="642" y="330" font-size="11.5" fill="#4A5568" text-anchor="middle">（3.5 节）</text>
+
+  <!-- 主链箭头（尖端停在目标边线） -->
+  <line x1="320" y1="102" x2="320" y2="105" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="313,105 327,105 320,116" fill="#94A3B8"/>
+  <line x1="320" y1="204" x2="320" y2="249" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="313,249 327,249 320,260" fill="#94A3B8"/>
+  <polyline points="205,310 140,310 140,429" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="133,429 147,429 140,440" fill="#94A3B8"/>
+  <text x="196" y="296" font-size="11.5" fill="#B7791F" text-anchor="end" data-halo="1">是（静音）</text>
+  <polyline points="320,360 320,400 555,400 555,429" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="548,429 562,429 555,440" fill="#94A3B8"/>
+  <text x="334" y="392" font-size="11.5" fill="#2F855A" text-anchor="start" data-halo="1">否（有语音）</text>
+  <polyline points="140,516 140,546 249,546 249,559" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="242,559 256,559 249,570" fill="#94A3B8"/>
+  <polyline points="555,516 555,546 451,546 451,559" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="444,559 458,559 451,570" fill="#94A3B8"/>
+  <line x1="320" y1="636" x2="320" y2="673" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="313,673 327,673 320,684" fill="#94A3B8"/>
+
+  <!-- 循环：否等待下一帧（右侧回到顶部） -->
+  <polyline points="425,160 528,160 528,69 500,69" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="500,62 500,76 489,69" fill="#94A3B8"/>
+  <text x="519" y="128" font-size="11.5" fill="#B7791F" text-anchor="end" data-halo="1">否：等待下一帧</text>
+  <!-- 循环：每个步长回到输入（左侧） -->
+  <polyline points="150,713 70,713 70,69 139,69" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="139,62 139,76 150,69" fill="#94A3B8"/>
+  <text x="82" y="396" font-size="11.5" fill="#4A5568" text-anchor="start" data-halo="1">每个步长循环</text>
+
+  <!-- 守护虚线：① 从回环线分支，② 从判定菱形出发 -->
+  <line x1="528" y1="118" x2="551" y2="118" stroke="#C53030" stroke-width="1.4" stroke-dasharray="6,5"/>
+  <polygon points="551,112 551,124 562,118" fill="#C53030"/>
+  <polyline points="425,186 480,186 480,300 551,300" fill="none" stroke="#B7791F" stroke-width="1.4" stroke-dasharray="6,5"/>
+  <polygon points="551,294 551,306 562,300" fill="#B7791F"/>
+</svg>

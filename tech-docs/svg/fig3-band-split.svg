@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="704" height="395" font-family="Microsoft YaHei">
+<rect x="52.0" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="52.2" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="52.5" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="52.7" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="52.9" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="53.1" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="53.4" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="53.6" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="53.8" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="54.1" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="54.3" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="54.5" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="54.7" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="55.0" y="96" width="1.2" height="60" fill="#C3DCF9" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="55.2" y="96" width="1.2" height="60" fill="#D6E6FB" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="55.4" y="96" width="1.2" height="60" fill="#C2E7D0" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="55.9" y="96" width="1.2" height="60" fill="#D5EEDF" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="56.3" y="96" width="1.2" height="60" fill="#C2E7D0" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="56.8" y="96" width="1.2" height="60" fill="#D5EEDF" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="57.2" y="96" width="1.2" height="60" fill="#C2E7D0" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="57.7" y="96" width="1.2" height="60" fill="#D5EEDF" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="58.2" y="96" width="1.2" height="60" fill="#C2E7D0" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="58.6" y="96" width="1.2" height="60" fill="#D5EEDF" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="59.1" y="96" width="1.2" height="60" fill="#C2E7D0" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="59.5" y="96" width="1.2" height="60" fill="#D5EEDF" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="60.0" y="96" width="1.2" height="60" fill="#FBE7AE" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="61.2" y="96" width="1.2" height="60" fill="#FDEFCC" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="62.4" y="96" width="1.2" height="60" fill="#FBE7AE" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="63.6" y="96" width="1.2" height="60" fill="#FDEFCC" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="64.8" y="96" width="1.2" height="60" fill="#FBE7AE" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="66.1" y="96" width="4.9" height="60" fill="#F9D5D5" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="70.9" y="96" width="1.2" height="60" fill="#D3DCE8" stroke="#FFFFFF" stroke-width="1"/>
+<line x1="52.0" y1="88" x2="52.0" y2="96" stroke="#718096" stroke-width="1.2"/>
+<text x="52.0" y="80" font-size="12" fill="#718096" text-anchor="middle" font-family="Microsoft YaHei">0</text>
+<line x1="158.4" y1="88" x2="158.4" y2="96" stroke="#718096" stroke-width="1.2"/>
+<text x="158.4" y="80" font-size="12" fill="#718096" text-anchor="middle" font-family="Microsoft YaHei">1.4k</text>
+<line x1="302.8" y1="88" x2="302.8" y2="96" stroke="#718096" stroke-width="1.2"/>
+<text x="302.8" y="80" font-size="12" fill="#718096" text-anchor="middle" font-family="Microsoft YaHei">3.3k</text>
+<line x1="492.8" y1="88" x2="492.8" y2="96" stroke="#718096" stroke-width="1.2"/>
+<text x="492.8" y="80" font-size="12" fill="#718096" text-anchor="middle" font-family="Microsoft YaHei">5.8k</text>
+<line x1="644.8" y1="88" x2="644.8" y2="96" stroke="#718096" stroke-width="1.2"/>
+<text x="644.8" y="80" font-size="12" fill="#718096" text-anchor="middle" font-family="Microsoft YaHei">7.8k</text>
+<line x1="660.0" y1="88" x2="660.0" y2="96" stroke="#718096" stroke-width="1.2"/>
+<rect x="60" y="169" width="22" height="16" rx="3" fill="#D6E6FB" stroke="#718096" stroke-width="1"/>
+<text x="94" y="182" font-size="12.5" font-weight="700" fill="#1F2933" text-anchor="start" font-family="Microsoft YaHei">0～1.4 kHz</text>
+<text x="190" y="182" font-size="12.5" fill="#4A5568" text-anchor="start" font-family="Microsoft YaHei">15 带 × 93.75 Hz</text>
+<text x="314" y="182" font-size="12.5" fill="#718096" text-anchor="start" font-family="Microsoft YaHei">基频与第一、二共振峰（细分，信息最密）</text>
+<rect x="60" y="196" width="22" height="16" rx="3" fill="#D5EEDF" stroke="#718096" stroke-width="1"/>
+<text x="94" y="209" font-size="12.5" font-weight="700" fill="#1F2933" text-anchor="start" font-family="Microsoft YaHei">1.4～3.3 kHz</text>
+<text x="190" y="209" font-size="12.5" fill="#4A5568" text-anchor="start" font-family="Microsoft YaHei">10 带 × 187.5 Hz</text>
+<text x="314" y="209" font-size="12.5" fill="#718096" text-anchor="start" font-family="Microsoft YaHei">第二、三共振峰与辅音起始</text>
+<rect x="60" y="223" width="22" height="16" rx="3" fill="#FDEFCC" stroke="#718096" stroke-width="1"/>
+<text x="94" y="236" font-size="12.5" font-weight="700" fill="#1F2933" text-anchor="start" font-family="Microsoft YaHei">3.3～5.8 kHz</text>
+<text x="190" y="236" font-size="12.5" fill="#4A5568" text-anchor="start" font-family="Microsoft YaHei">5 带 × 500 Hz</text>
+<text x="314" y="236" font-size="12.5" fill="#718096" text-anchor="start" font-family="Microsoft YaHei">中高频</text>
+<rect x="60" y="250" width="22" height="16" rx="3" fill="#F9D5D5" stroke="#718096" stroke-width="1"/>
+<text x="94" y="263" font-size="12.5" font-weight="700" fill="#1F2933" text-anchor="start" font-family="Microsoft YaHei">5.8～7.8 kHz</text>
+<text x="190" y="263" font-size="12.5" fill="#4A5568" text-anchor="start" font-family="Microsoft YaHei">1 带 × 2 kHz</text>
+<text x="314" y="263" font-size="12.5" fill="#718096" text-anchor="start" font-family="Microsoft YaHei">高频摩擦音（粗分）</text>
+<rect x="60" y="277" width="22" height="16" rx="3" fill="#E2E8F0" stroke="#718096" stroke-width="1"/>
+<text x="94" y="290" font-size="12.5" font-weight="700" fill="#1F2933" text-anchor="start" font-family="Microsoft YaHei">7.8～8 kHz</text>
+<text x="190" y="290" font-size="12.5" fill="#4A5568" text-anchor="start" font-family="Microsoft YaHei">1 带 × 250 Hz</text>
+<text x="314" y="290" font-size="12.5" fill="#718096" text-anchor="start" font-family="Microsoft YaHei">剩余频段</text>
+<rect x="40" y="331" width="624" height="52" rx="8" fill="#F5F7FA" stroke="#718096" stroke-width="1.2"/>
+<text x="352" y="353" font-size="12.5" fill="#4A5568" text-anchor="middle" font-family="Microsoft YaHei">合计 15×3 + 10×6 + 5×16 + 1×64 + 1×8 = 257 频点（每频点 31.25 Hz，式 30）</text>
+<text x="352" y="373" font-size="12.5" fill="#4A5568" text-anchor="middle" font-family="Microsoft YaHei">带宽分配与人耳临界频带先验对齐——低频细分、高频粗分</text>
+</svg>
