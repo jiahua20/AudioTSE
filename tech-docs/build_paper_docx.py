@@ -57,17 +57,46 @@ def build_reference():
             set_style(doc, s, 'Times New Roman', '宋体')
         except KeyError:
             pass
-    set_style(doc, 'Title', 'Times New Roman', '黑体', size=18, bold=True, black=True)
-    doc.styles['Title'].paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # 正文：两端对齐 + 首行缩进 2 字符（中文论文版式）
+    for s in ('Body Text', 'First Paragraph'):
+        try:
+            pf = doc.styles[s].paragraph_format
+            pf.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            pf.first_line_indent = Pt(21)
+        except KeyError:
+            pass
+    # 封面：大标题下沉居中，日期随后，封面后由后处理插入分页
+    set_style(doc, 'Title', 'Times New Roman', '黑体', size=22, bold=True, black=True)
+    tp = doc.styles['Title'].paragraph_format
+    tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tp.space_before = Pt(160)
+    tp.space_after = Pt(28)
     for s in ('Author', 'Date'):
         try:
             set_style(doc, s, 'Times New Roman', '宋体', size=12, black=True)
-            doc.styles[s].paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            dpf = doc.styles[s].paragraph_format
+            dpf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            dpf.space_before = Pt(16)
         except KeyError:
             pass
-    set_style(doc, 'Heading 1', 'Times New Roman', '黑体', size=15, bold=True, black=True)
-    set_style(doc, 'Heading 2', 'Times New Roman', '黑体', size=13, bold=True, black=True)
-    set_style(doc, 'Heading 3', 'Times New Roman', '黑体', size=11.5, bold=True, black=True)
+    # 标题层级：字体 + 前后留白
+    for s, size, before, after in (('Heading 1', 15, 20, 10), ('Heading 2', 13, 14, 8),
+                                   ('Heading 3', 11.5, 12, 6)):
+        set_style(doc, s, 'Times New Roman', '黑体', size=size, bold=True, black=True)
+        pf = doc.styles[s].paragraph_format
+        pf.space_before = Pt(before)
+        pf.space_after = Pt(after)
+    # 图：居中；题注：图下方居中、小一号
+    for s, size, before, after in (('Captioned Figure', None, 10, 4),
+                                   ('Image Caption', 9, 4, 16)):
+        try:
+            set_style(doc, s, 'Times New Roman', '宋体', size=size, black=True)
+            pf = doc.styles[s].paragraph_format
+            pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            pf.space_before = Pt(before)
+            pf.space_after = Pt(after)
+        except KeyError:
+            pass
     for s in ('Source Code', 'Verbatim Char'):
         try:
             set_style(doc, s, 'Consolas', '宋体', size=9)
@@ -114,11 +143,63 @@ def postprocess_omml(docx_path):
         return blk
     n_nary = len(re.findall(r'<m:nary>', xml))
     xml = re.sub(r'<m:nary>.*?</m:nary>', fix_nary, xml, flags=re.S)
+
+    # —— 版式后处理 ——
+    # 封面独立成节：Date 段内嵌节属性（节尾分节符即分页），封面节引用空页脚，
+    # 正文节沿用 footer1 的页码——比 titlePg 稳（WPS 对 titlePg 会连正文页脚一起丢）
+    f1 = items.get('word/footer1.xml', b'')
+    if f1:
+        items['word/footer2.xml'] = re.sub(rb'<w:p\b.*?</w:p>', b'<w:p/>', f1, flags=re.S)
+        ct = items['[Content_Types].xml'].decode('utf-8')
+        ct = ct.replace('</Types>',
+                        '<Override PartName="/word/footer2.xml" '
+                        'ContentType="application/vnd.openxmlformats-officedocument.'
+                        'wordprocessingml.footer+xml"/></Types>')
+        items['[Content_Types].xml'] = ct.encode('utf-8')
+        rels = items['word/_rels/document.xml.rels'].decode('utf-8')
+        rid = max(int(m) for m in re.findall(r'Id="rId(\d+)"', rels)) + 1
+        rels = rels.replace('</Relationships>',
+                            f'<Relationship Id="rId{rid}" '
+                            'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                            f'relationships/footer" Target="footer2.xml"/></Relationships>')
+        items['word/_rels/document.xml.rels'] = rels.encode('utf-8')
+        xml = re.sub(r'(<w:pStyle w:val="Date"\s*/>)',
+                     r'\1<w:sectPr><w:footerReference w:type="default" r:id="rId%d"/></w:sectPr>' % rid,
+                     xml, count=1)
+
+    def fix_para(mo):
+        p = mo.group(0)
+        if '<w:drawing>' in p:
+            inject = '<w:ind w:firstLine="0"/><w:jc w:val="center"/>'
+        elif '<m:oMathPara>' in p:
+            inject = '<w:ind w:firstLine="0"/>'
+        else:
+            return p
+        m = re.search(r'<w:pPr>\s*(?:<w:pStyle w:val="[^"]+"\s*/>)?', p)
+        if m:
+            at = m.end()
+            p = p[:at] + inject + p[at:]
+        elif '<w:pPr>' in p:
+            p = p.replace('<w:pPr>', '<w:pPr>' + inject, 1)
+        else:
+            p = re.sub(r'(<w:p\b[^>]*>)', r'\1<w:pPr>' + inject + '</w:pPr>', p, count=1)
+        return p
+    xml = re.sub(r'<w:p\b[^>]*>.*?</w:p>', fix_para, xml, flags=re.S)
+
+    # 表格内文字缩到 9.5pt（sz=19）
+    def shrink_table(mo):
+        t = mo.group(0)
+        t = t.replace('</w:rPr>', '<w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr>')
+        t = re.sub(r'<w:r>(?=<w:t)', '<w:r><w:rPr><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr>', t)
+        return t
+    xml = re.sub(r'<w:tbl>.*?</w:tbl>', shrink_table, xml, flags=re.S)
     items['word/document.xml'] = xml.encode('utf-8')
 
     s = items['word/settings.xml'].decode('utf-8')
     if '<m:mathPr>' not in s:
-        mathpr = ('<m:mathPr><m:mathFont m:val="Cambria Math"/><m:brkBin m:val="before"/>'
+        # 本机无 Cambria Math（WPS 会弹缺字体提示）：声明成已安装的 Times New Roman，
+        # OMML 实际渲染走 WPS 内部引擎，不受此声明影响
+        mathpr = ('<m:mathPr><m:mathFont m:val="Times New Roman"/><m:brkBin m:val="before"/>'
                   '<m:brkBinSub m:val="--"/><m:smallFrac m:val="0"/><m:dispDef/>'
                   '<m:lMargin m:val="0"/><m:rMargin m:val="0"/><m:defJc m:val="centerGroup"/>'
                   '<m:wrapIndent m:val="1440"/><m:intLim m:val="subSup"/>'
@@ -127,9 +208,15 @@ def postprocess_omml(docx_path):
             s = s.replace('<w:settings ', '<w:settings xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" ', 1)
         s = s.replace('</w:settings>', mathpr + '</w:settings>')
         items['word/settings.xml'] = s.encode('utf-8')
+    else:
+        items['word/settings.xml'] = s.replace(
+            '<m:mathFont m:val="Cambria Math"/>',
+            '<m:mathFont m:val="Times New Roman"/>').encode('utf-8')
 
     with zipfile.ZipFile(docx_path, 'w', zipfile.ZIP_DEFLATED) as zout:
         for n, data in items.items():
+            if n.endswith('.xml') and b'Cambria Math' in data:
+                data = data.replace(b'Cambria Math', b'Times New Roman')
             zout.writestr(n, data)
     print(f'omml postprocess: removed {zwsp} zero-width spaces, fixed nary slots '
           f'({n_nary} nary), mathPr ensured')

@@ -42,11 +42,11 @@
   <polygon points="313,105 327,105 320,116" fill="#94A3B8"/>
   <line x1="320" y1="204" x2="320" y2="249" stroke="#94A3B8" stroke-width="1.6"/>
   <polygon points="313,249 327,249 320,260" fill="#94A3B8"/>
-  <polyline points="205,310 140,310 140,429" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
-  <polygon points="133,429 147,429 140,440" fill="#94A3B8"/>
+  <polyline points="205,310 140,310 140,429" fill="none" stroke="#B7791F" stroke-width="1.6"/>
+  <polygon points="133,429 147,429 140,440" fill="#B7791F"/>
   <text x="196" y="296" font-size="11.5" fill="#B7791F" text-anchor="end" data-halo="1">是（静音）</text>
-  <polyline points="320,360 320,400 555,400 555,429" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
-  <polygon points="548,429 562,429 555,440" fill="#94A3B8"/>
+  <polyline points="320,360 320,400 555,400 555,429" fill="none" stroke="#2F855A" stroke-width="1.6"/>
+  <polygon points="548,429 562,429 555,440" fill="#2F855A"/>
   <text x="334" y="392" font-size="11.5" fill="#2F855A" text-anchor="start" data-halo="1">否（有语音）</text>
   <polyline points="140,516 140,546 249,546 249,559" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
   <polygon points="242,559 256,559 249,570" fill="#94A3B8"/>
@@ -55,12 +55,12 @@
   <line x1="320" y1="636" x2="320" y2="673" stroke="#94A3B8" stroke-width="1.6"/>
   <polygon points="313,673 327,673 320,684" fill="#94A3B8"/>
 
-  <!-- 循环：否等待下一帧（右侧回到顶部） -->
-  <polyline points="425,160 528,160 528,69 500,69" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <!-- 循环：否等待下一帧（右侧回到顶部；控制回环用虚线区别于数据流） -->
+  <polyline points="425,160 528,160 528,69 500,69" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6,5"/>
   <polygon points="500,62 500,76 489,69" fill="#94A3B8"/>
   <text x="519" y="128" font-size="11.5" fill="#B7791F" text-anchor="end" data-halo="1">否：等待下一帧</text>
   <!-- 循环：每个步长回到输入（左侧） -->
-  <polyline points="150,713 70,713 70,69 139,69" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polyline points="150,713 70,713 70,69 139,69" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6,5"/>
   <polygon points="139,62 139,76 150,69" fill="#94A3B8"/>
   <text x="82" y="396" font-size="11.5" fill="#4A5568" text-anchor="start" data-halo="1">每个步长循环</text>
 

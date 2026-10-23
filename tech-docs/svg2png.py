@@ -16,13 +16,19 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 SVG_DIR = os.path.join(HERE, 'svg')
 PNG_DIR = os.path.join(HERE, 'png')
-SCALE = 2
+SCALE = 3
 MAX_W_IN = 6.1
 
 YAHEI = r'C:\Windows\Fonts\msyh.ttc'
 YAHEI_BD = r'C:\Windows\Fonts\msyhbd.ttc'
 FALLBACK = r'C:\Windows\Fonts\simhei.ttf'
+# 组合记号（如 r̂ 的 U+0302）雅黑没有字形，从 Arial 取（实测中心对齐良好）
+MARK_FONT = r'C:\Windows\Fonts\arial.ttf'
 _fonts = {}
+
+
+def _is_mark(ch):
+    return 0x300 <= ord(ch) <= 0x36F
 
 
 def font(size, bold=False):
@@ -32,6 +38,16 @@ def font(size, bold=False):
         if not os.path.exists(path):
             path = FALLBACK
         _fonts[key] = ImageFont.truetype(path, int(size))
+    return _fonts[key]
+
+
+def mark_font(size):
+    key = ('mark', round(size, 1))
+    if key not in _fonts:
+        try:
+            _fonts[key] = ImageFont.truetype(MARK_FONT, int(size))
+        except OSError:
+            _fonts[key] = None
     return _fonts[key]
 
 
@@ -127,6 +143,29 @@ class Svg:
             elif tag in ('rect', 'circle', 'line', 'polyline', 'polygon', 'path', 'text'):
                 self.items.append((tag, ch, o))
 
+    @staticmethod
+    def _draw_text(d, pos, txt, f, fs, col, anchor):
+        """整串绘制；含组合记号时逐字符绘制，记号从 Arial 取、按基字符中心对齐。"""
+        if not any(_is_mark(c) for c in txt):
+            d.text(pos, txt, font=f, fill=col, anchor=anchor)
+            return
+        mf = mark_font(fs * SCALE)
+        total = sum(f.getlength(c) for c in txt if not _is_mark(c))
+        pen = {'ls': pos[0], 'ms': pos[0] - total / 2, 'rs': pos[0] - total}[anchor]
+        prev_x, prev_c = None, None
+        for c in txt:
+            if _is_mark(c):
+                if prev_c is not None and mf is not None:
+                    bb, mb = f.getbbox(prev_c), mf.getbbox(c)
+                    if bb and mb and bb[2] > bb[0] and mb[2] > mb[0]:
+                        center = prev_x + (bb[0] + bb[2]) / 2
+                        d.text((center - (mb[0] + mb[2]) / 2, pos[1]), c,
+                               font=mf, fill=col, anchor='ls')
+            else:
+                d.text((pen, pos[1]), c, font=f, fill=col, anchor='ls')
+                prev_x, prev_c = pen, c
+                pen += f.getlength(c)
+
     def render(self, png_path):
         # 先收集所有坐标点求画布范围
         xs, ys = [], []
@@ -166,9 +205,10 @@ class Svg:
                 fy = float(a.get('y', 0)) + y0
                 fs = float(a.get('font-size', 14))
                 txt = ''.join(el.itertext()).strip()
-                # 估算文字宽度：ASCII 约 0.52em，中文约 1.0em；再按锚点定区间
+                # 估算文字宽度：ASCII 约 0.52em，中文约 1.0em，组合记号 0；再按锚点定区间
                 n_ascii = sum(1 for c in txt if ord(c) < 128)
-                tw = (n_ascii * 0.52 + (len(txt) - n_ascii) * 1.0) * fs
+                n_mark = sum(1 for c in txt if _is_mark(c))
+                tw = (n_ascii * 0.52 + (len(txt) - n_ascii - n_mark) * 1.0) * fs
                 anchor = a.get('text-anchor', 'start')
                 if anchor == 'middle':
                     tx0, tx1 = fx - tw / 2, fx + tw / 2
@@ -286,9 +326,6 @@ class Svg:
         anchor = {'start': 'ls', 'middle': 'ms', 'end': 'rs'}.get(a.get('text-anchor', 'start'), 'ls')
         # 白底光环（边的标签不被线穿过）
         if a.get('data-halo'):
-            segs = [(pos, el.text or '')]
-            for ts in el.findall('tspan'):
-                pass
             txt = ''.join(el.itertext())
             w = d.textlength(txt, font=f)
             pad = 4 * SCALE // 2
@@ -297,7 +334,7 @@ class Svg:
         # 主体（text 自身 + tspan 绝对/相对定位）
         ox, oy = float(a.get('x', 0)), float(a.get('y', 0))
         if el.text and el.text.strip():
-            d.text(pos, el.text.strip(), font=f, fill=col, anchor=anchor)
+            self._draw_text(d, pos, el.text.strip(), f, fs, col, anchor)
         cur_x, cur_y = ox, oy
         for ts in el.findall('tspan'):
             ta = ts.attrib
@@ -326,45 +363,51 @@ def gen_fig3_svg(path):
         ('5.8～7.8 kHz', '1 带 × 2 kHz', '高频摩擦音（粗分）', '#F9D5D5', '#F5C2C2', 2000),
         ('7.8～8 kHz', '1 带 × 250 Hz', '剩余频段', '#E2E8F0', '#D3DCE8', 250),
     ]
-    PX = 0.076
-    x0, y0, h = 52, 96, 60
+    PX = 0.085          # px / Hz，频带矩形与频率刻度共用同一比例
+    HZ = 31.25          # 每频点 Hz 数
+    x0, y0, h = 26, 108, 64
     parts = []
+    parts.append(f'<text x="{x0 + 4000 * PX:.1f}" y="{y0 - 40}" font-size="12.5" fill="#718096" '
+                 f'text-anchor="middle" font-family="Microsoft YaHei">频率（Hz）</text>')
     x, gi = x0, 0
     for bi, bw in enumerate(bands):
         while gi + 1 < 5 and bi >= [15, 25, 30, 31][gi]:
             gi += 1
-        w = bw * PX
+        w = bw * HZ * PX
         fill = groups[gi][3] if bi % 2 == 0 else groups[gi][4]
-        parts.append(f'<rect x="{x:.1f}" y="{y0}" width="{max(w,1.2):.1f}" height="{h}" '
+        parts.append(f'<rect x="{x:.1f}" y="{y0}" width="{max(w, 2):.1f}" height="{h}" '
                      f'fill="{fill}" stroke="#FFFFFF" stroke-width="1"/>')
         x += w
+    # 组内带数标注（色带下方各組中心；末组太窄由图例覆盖）
+    counts = [15, 10, 5, 1, 1]
+    gx = x0
+    for g in range(5):
+        span = groups[g][5] * PX
+        if span >= 100:
+            parts.append(f'<text x="{gx + span / 2:.1f}" y="{y0 + h + 20}" font-size="12.5" '
+                         f'font-weight="700" fill="#1F2933" text-anchor="middle" '
+                         f'font-family="Microsoft YaHei">{counts[g]} 带</text>')
+        gx += span
     # 频率刻度（7.8k 与 8k 相距过近，只保留 7.8k 标签）
     allb = [x0 + v * PX for v in (0, 1400, 3300, 5800, 7800, 8000)]
     for i, (tx, lab) in enumerate(zip(allb, ['0', '1.4k', '3.3k', '5.8k', '7.8k', ''])):
-        parts.append(f'<line x1="{tx:.1f}" y1="{y0-8}" x2="{tx:.1f}" y2="{y0}" stroke="#718096" stroke-width="1.2"/>')
+        parts.append(f'<line x1="{tx:.1f}" y1="{y0-10}" x2="{tx:.1f}" y2="{y0}" stroke="#718096" stroke-width="1.3"/>')
         if lab:
-            parts.append(f'<text x="{tx:.1f}" y="{y0-16}" font-size="12" fill="#718096" '
+            parts.append(f'<text x="{tx:.1f}" y="{y0-18}" font-size="12" fill="#718096" '
                          f'text-anchor="middle" font-family="Microsoft YaHei">{lab}</text>')
     # 色块图例行（每行独占全宽，互不遮挡）
-    ly = y0 + h + 26
+    ly = y0 + h + 44
     for i, (rng, width_desc, use, c1, _c2, _span) in enumerate(groups):
         yy = ly + i * 27
         parts.append(f'<rect x="60" y="{yy-13}" width="22" height="16" rx="3" fill="{c1}" stroke="#718096" stroke-width="1"/>')
-        parts.append(f'<text x="94" y="{yy}" font-size="12.5" font-weight="700" fill="#1F2933" '
+        parts.append(f'<text x="94" y="{yy}" font-size="13" font-weight="700" fill="#1F2933" '
                      f'text-anchor="start" font-family="Microsoft YaHei">{rng}</text>')
-        parts.append(f'<text x="{94+96}" y="{yy}" font-size="12.5" fill="#4A5568" '
+        parts.append(f'<text x="212" y="{yy}" font-size="12.5" fill="#4A5568" '
                      f'text-anchor="start" font-family="Microsoft YaHei">{width_desc}</text>')
-        parts.append(f'<text x="{94+220}" y="{yy}" font-size="12.5" fill="#718096" '
+        parts.append(f'<text x="352" y="{yy}" font-size="12.5" fill="#718096" '
                      f'text-anchor="start" font-family="Microsoft YaHei">{use}</text>')
-    note_y = ly + 5 * 27 + 14
-    parts.append(f'<rect x="40" y="{note_y}" width="624" height="52" rx="8" fill="#F5F7FA" stroke="#718096" stroke-width="1.2"/>')
-    parts.append(f'<text x="352" y="{note_y+22}" font-size="12.5" fill="#4A5568" text-anchor="middle" '
-                 f'font-family="Microsoft YaHei">合计 15×3 + 10×6 + 5×16 + 1×64 + 1×8 = 257 频点'
-                 f'（每频点 31.25 Hz，式 30）</text>')
-    parts.append(f'<text x="352" y="{note_y+42}" font-size="12.5" fill="#4A5568" text-anchor="middle" '
-                 f'font-family="Microsoft YaHei">带宽分配与人耳临界频带先验对齐——低频细分、高频粗分</text>')
-    height = note_y + 52 + 12
-    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="704" height="{}" '
+    height = ly + 5 * 27 + 4
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="732" height="{}" '
            'font-family="Microsoft YaHei">\n'.format(int(height)) + '\n'.join(parts) + '\n</svg>\n')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(svg)
