@@ -12,8 +12,7 @@
   <text x="170" y="194" font-size="13" fill="#1F2933" text-anchor="middle">独立 VAD 剥静音</text>
   <text x="170" y="216" font-size="13" fill="#1F2933" text-anchor="middle">净语音累计（目标 1.2 s）</text>
   <polygon points="170,250 277,296 170,342 63,296" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
-  <text x="170" y="294" font-size="13" fill="#1F2933" text-anchor="middle">净语音够了？</text>
-  <text x="170" y="314" font-size="10.5" fill="#4A5568" text-anchor="middle">不足 0.6 s：再说一句</text>
+  <text x="170" y="300" font-size="13" fill="#1F2933" text-anchor="middle">净语音够了？</text>
   <rect x="40" y="430" width="260" height="64" rx="10" fill="#FFFFFF" stroke="#4A5568" stroke-width="1.6"/>
   <text x="170" y="456" font-size="12.5" fill="#1F2933" text-anchor="middle">ER2Net 嵌入 r（512 维）</text>
   <text x="170" y="478" font-size="12.5" fill="#4A5568" text-anchor="middle">式(9)~(14)：外置知识</text>
@@ -50,6 +49,11 @@
   <polygon points="163,153 177,153 170,164" fill="#94A3B8"/>
   <line x1="170" y1="232" x2="170" y2="246" stroke="#94A3B8" stroke-width="1.6"/>
   <polygon points="163,235 177,235 170,246" fill="#94A3B8"/>
+  <!-- 净语音不足：回到注册语音再说一句（控制回流，虚线） -->
+  <polyline points="63,296 24,296 24,100 29,100" fill="none" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6,5"/>
+  <polygon points="29,94 29,106 36,100" fill="#94A3B8"/>
+  <text x="30" y="264" font-size="11" fill="#C53030" text-anchor="start">不足 0.6 s</text>
+  <text x="30" y="282" font-size="11" fill="#C53030" text-anchor="start">再说一句</text>
   <line x1="170" y1="342" x2="170" y2="426" stroke="#94A3B8" stroke-width="1.6"/>
   <polygon points="163,415 177,415 170,426" fill="#94A3B8"/>
   <text x="182" y="388" font-size="11.5" fill="#2F855A" text-anchor="start">足够</text>

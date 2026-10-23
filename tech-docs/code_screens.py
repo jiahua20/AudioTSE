@@ -56,7 +56,7 @@ TITLES = [
 SPECS = [
     [
         (['threshold: 0.5', 'minSilenceDuration: 0.3', 'minSpeechDuration: 0.1', 'maxSpeechDuration: 15.0'],
-         '式(2)+段状态机：0.3 秒静音即「一句话说完」，直接决定门控的判定粒度与延迟'),
+         '式(2)+段状态机：0.3 秒静音即“一句话说完”，直接决定门控的判定粒度与延迟'),
         (['const CHUNK = 2560'],
          '160 毫秒分块喂入：有状态模型的工程约束——大块单次喂入会丢段边界（2.2 节）'),
     ],
@@ -76,7 +76,7 @@ SPECS = [
     ],
     [
         (['rms(chunk) < this.silenceRms'],
-         '式(19)：静音直判——不推理、不更新平滑状态（静音的「声纹」是乱数）'),
+         '式(19)：静音直判——不推理、不更新平滑状态（静音的“声纹”是乱数）'),
         (['this.pending < this.hopSamples'],
          '凑步中（<500 ms）沿用上次结论：放行决策连续，不逐块翻转'),
         (['this.filter.judge(this.buf)'],
@@ -116,7 +116,7 @@ SPECS = [
     ],
     [
         (['ramp = np.linspace', 'win[: self._cf_samples] = ramp', 'win[-self._cf_samples:] = 1.0 - ramp'],
-         '式(42)：梯形合成窗——头尾 ramp 互补，是重叠区「和恒为 1」的前提；半开区间保证衔接点恰为 1'),
+         '式(42)：梯形合成窗——头尾 ramp 互补，是重叠区“和恒为 1”的前提；半开区间保证衔接点恰为 1'),
         (['self._out_overlap[:n] += seg'],
          '式(43)(45)：重叠区自然叠加 = 前窗淡出 + 本窗淡入的凸组合，接缝无跳变'),
         (['ready = self._out_overlap[:hop].copy()'],
@@ -138,7 +138,7 @@ SPECS = [
         (['HOP_MS = (WINDOW_SECONDS'],
          '步长 = 窗长 − 交叉淡化 = 0.9 秒（式 42 的 H）'),
         (['(tse_ms + asr_ms) / HOP_MS'],
-         '式(49)：RTF 以步长为分母——「每秒音频需要多少秒 CPU」的真实口径'),
+         '式(49)：RTF 以步长为分母——“每秒音频需要多少秒 CPU”的真实口径'),
     ],
 ]
 
