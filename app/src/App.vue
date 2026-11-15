@@ -110,7 +110,7 @@ let fileKind: 'enroll' | 'mix' | null = null     // 当前正在灌入的文件�
 const busy = computed(() => state.value === 'enrolling' || state.value === 'extracting')
 // TSE 引擎在后台加载时禁用「开始注册」：把权重加载那约 5 秒挡在注册之前，
 // 这样点「开始提取」时引擎已热，不再卡在加载上。
-const tseLoading = computed(() => selectedProcessor.value === 'tse' && !tseEngineReady.value)
+const tseLoading = computed(() => isTse(selectedProcessor.value) && !tseEngineReady.value)
 const enrollDisabled = computed(() => !connected.value || state.value === 'extracting' || tseLoading.value)
 // 注册按钮的三态文案：注册中→完成 / 引擎加载中→加载模型 / 否则→开始注册
 const enrollLabel = computed(() => {
@@ -148,9 +148,14 @@ function withPunct(s: string) {
   return /[。，！？；,!?;.]$/.test(s.trim()) ? s : `${s}。`
 }
 
+// 两种 TSE 链路（正向提取 / 反向消除）共用同一 WeSep 引擎与注册流程
+function isTse(processor: string) {
+  return processor === 'tse' || processor === 'tse-suppress'
+}
+
 // 链路对应的默认通知语气：TSE 绿 / 直通黄（警告不筛选）/ 门控蓝
 function toneForProcessor(processor: string): BannerTone {
-  if (processor === 'tse') return 'ok'
+  if (isTse(processor)) return 'ok'
   if (processor === 'passthrough') return 'warn'
   return 'info'
 }
@@ -208,9 +213,11 @@ function connectBackend() {
       tseEngineReady.value = false  // 切换链路后重置；切到 TSE 时后端会重新预加载并通知
       notice.value = selectedProcessor.value === 'tse'
         ? '纯音频 TSE 已启用：WeSep BSRNN 约 1.7 秒缓冲，正在后台加载分离模型…'
-        : selectedProcessor.value === 'speaker_gate'
-          ? '声纹门控降级已启用：适合轮流说话，不支持重叠语音分离'
-          : '原音诊断已启用：所有说话人都会进入识别'
+        : selectedProcessor.value === 'tse-suppress'
+          ? '目标人消除已启用：输出 混音−目标估计，只保留其他人的声音…'
+          : selectedProcessor.value === 'speaker_gate'
+            ? '声纹门控降级已启用：适合轮流说话，不支持重叠语音分离'
+            : '原音诊断已启用：所有说话人都会进入识别'
       noticeTone.value = toneForProcessor(selectedProcessor.value)
     }
     if (event.event === 'error') {
@@ -566,6 +573,7 @@ function meterStyle(bar: number) {
 // 链路 id → 侧栏短名
 function processorLabel(processor: string) {
   if (processor === 'tse') return '纯音频 TSE'
+  if (processor === 'tse-suppress') return '目标人消除'
   if (processor === 'speaker_gate') return '声纹降级'
   return '原音诊断'
 }
@@ -601,7 +609,7 @@ function processorLabel(processor: string) {
         <div class="engine-status">
           <div class="engine-row"><span>中文流式 ASR</span><b :class="{ ok: asrReady }">{{ asrReady ? '就绪' : '缺少模型' }}</b></div>
           <div class="engine-row"><span>纯音频 TSE</span><b :class="{ ok: tseReady && !tseLoading }" :title="tseLoading ? '正在后台加载 262MB 分离模型' : ''">{{ tseLoading ? '加载中…' : tseReady ? '实验就绪' : '待安装' }}</b></div>
-          <div class="engine-row"><span>当前链路</span><b :class="{ ok: selectedProcessor === 'tse' }">{{ processorLabel(selectedProcessor) }}</b></div>
+          <div class="engine-row"><span>当前链路</span><b :class="{ ok: isTse(selectedProcessor) }">{{ processorLabel(selectedProcessor) }}</b></div>
           <div class="engine-row"><span>运行设备</span><b>CPU</b></div>
         </div>
       </aside>

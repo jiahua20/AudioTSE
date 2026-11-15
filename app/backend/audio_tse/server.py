@@ -73,6 +73,13 @@ def model_options() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             "reason": TSE_MODEL.unavailable_reason,  # 不可用时的提示（如何安装）
         },
         {
+            "id": "tse-suppress",
+            "name": "目标人消除（反向 TSE，实验）",
+            "description": "同一 WeSep 引擎的反向任务：输出 混音−目标估计，从混音中消除注册人、只转写其他人",
+            "available": TSE_MODEL.available,
+            "reason": TSE_MODEL.unavailable_reason,
+        },
+        {
             "id": "passthrough",
             "name": "原音直通（诊断）",
             "description": "不区分说话人，用于比较 ASR 效果；端侧门控放行的段也走这条链路识别",
@@ -91,9 +98,9 @@ HOP_MS = (WINDOW_SECONDS - CROSSFADE_SECONDS) * 1000.0
 def rtf_for(processor: str, tse_ms: float, asr_ms: float) -> float | None:
     """Real-Time Factor（实时因子）= 处理时间 / 音频时间。小于 1 表示能跟上实时音频。
 
-    分母按链路取值：TSE 每 hop(0.9s) 处理一次，直通每帧(128ms) 处理一次；
-    没有任何处理耗时数据时返回 None（前端显示「—」）。"""
-    if processor == "tse":
+    分母按链路取值：两种 TSE（提取/消除）每 hop(0.9s) 处理一次，直通每帧
+    (128ms) 处理一次；没有任何处理耗时数据时返回 None（前端显示「—」）。"""
+    if processor in ("tse", "tse-suppress"):
         return (tse_ms + asr_ms) / HOP_MS if (tse_ms or asr_ms) else None
     return asr_ms / FRAME_MS if asr_ms else None
 
@@ -199,7 +206,8 @@ async def handle(websocket: ServerConnection) -> None:
     )
     # TSE 是主路径：连上就后台预加载分离引擎，让「开始注册」按钮在引擎就绪前
     # 保持禁用。这样点「开始提取」时引擎已热，不再卡在权重加载那约 5 秒上。
-    if selected_processor == "tse":
+    # 两种 TSE 链路（提取/消除）共用同一引擎，都触发预加载。
+    if selected_processor in ("tse", "tse-suppress"):
         kick_tse_preload()
     try:
         # 主循环：逐条处理前端消息（文本 = 命令 JSON，二进制 = 音频帧）
@@ -273,8 +281,9 @@ async def handle(websocket: ServerConnection) -> None:
                         selectedProcessor=selected_processor,
                         bypassEnabled=selected_processor == "passthrough",
                     )
-                    # 切到 TSE 时也开始预加载（若之前没在跑）；引擎已加载则会立即通知就绪
-                    if requested_processor == "tse":
+                    # 切到任一 TSE 链路时也开始预加载（若之前没在跑）；
+                    # 引擎已加载则会立即通知就绪
+                    if requested_processor in ("tse", "tse-suppress"):
                         kick_tse_preload()
                 elif command == "startExtraction":
                     # 开始实时提取：按当前选择创建链路实例
@@ -283,15 +292,17 @@ async def handle(websocket: ServerConnection) -> None:
                         raise SessionError("所选 ASR 模型尚未安装")
                     asr = StreamingAsr(model)  # 所有链路都需要 ASR
                     tse = None
-                    if selected_processor == "tse":
+                    if selected_processor in ("tse", "tse-suppress"):
                         try:
                             # 引擎连接级预加载（见 kick_tse_preload）；这里多半已就绪，
                             # 万一还没好（注册特别快、加载还没跑完）就等它收尾。
                             engine = await ensure_tse_engine()
+                            # tse-suppress 是同一引擎的反向任务：输出 混音−目标估计
+                            mode = "suppress" if selected_processor == "tse-suppress" else "extract"
                             # 构造要算 ECAPA 注册嵌入(数秒),丢线程池避免阻塞事件循环
                             # (否则 websocket ping 收不到回包、连接被超时掐断)
                             tse = await asyncio.to_thread(
-                                BufferedWeSepTse, engine, bytes(session.enrollment), VAD_MODEL)
+                                BufferedWeSepTse, engine, bytes(session.enrollment), VAD_MODEL, mode)
                         except Exception as error:
                             raise SessionError(f"WeSep TSE 加载失败：{error}") from error
                     session.start_extraction()  # 状态机进入 EXTRACTING

@@ -223,13 +223,24 @@ class BufferedWeSepTse:
     拼接缝被平滑过渡，而不是硬拼接（硬拼接会明显丢失/失真落在边界上的
     那个词）。
 
+    mode 按链路取值：
+      "extract"  正向 TSE：输出注册人在混音中的目标波形（默认，喂 ASR 出字幕）
+      "suppress" 反向 TSE：输出 混音−目标估计，即从混音中消除注册人、保留
+                 其他人。BSRNN 的输出是目标人在混音中那份贡献的相位对齐
+                 估计，因此逐采样相减即得其余声源，无需额外模型。
+    两种模式共用同一 OLA/VAD/积压机制；静音窗口在两种模式下都原样放行
+    （无语音即无可消除/提取的内容）。
+
     本对象只持有「与本次注册人有关」的状态（注册嵌入 + OLA 缓冲 + 本次
     的 VAD）；权重等与具体人无关的重资源由 WeSepTseEngine 在会话级加载
     一次后传入复用。
     """
 
     def __init__(self, engine: WeSepTseEngine, enrollment_pcm16: bytes,
-                 vad_model: Path | None = None) -> None:
+                 vad_model: Path | None = None, mode: str = "extract") -> None:
+        if mode not in ("extract", "suppress"):
+            raise ValueError(f"未知 TSE 模式：{mode}")
+        self._suppress = mode == "suppress"
         self._engine = engine
         # 注册语音 → ECAPA 嵌入，算一次后整个提取过程复用（不随窗口变）
         self._cached_spk_embedding = engine.compute_enroll_embedding(enrollment_pcm16)
@@ -292,6 +303,14 @@ class BufferedWeSepTse:
     def buffered_seconds(self) -> float:
         # 当前还在缓冲里的音频量（输入 FIFO + 输出重叠区），反映端到端积压
         return (len(self._in_buf) + len(self._out_overlap)) / SAMPLE_RATE
+
+    def _combine(self, window: np.ndarray, target: np.ndarray) -> np.ndarray:
+        """按模式把「混音窗口 + 目标估计」合成本窗输出段。
+
+        extract 输出目标估计本身；suppress 输出 混音−目标估计（其余声源）。
+        两种结果都要乘合成窗，才能参与 OLA 的交叉淡入淡出。"""
+        out = window - target if self._suppress else target
+        return out * self._synth_win
 
     @staticmethod
     def _to_pcm16(samples: np.ndarray) -> bytes:
@@ -364,7 +383,7 @@ class BufferedWeSepTse:
             else:
                 # 有语音窗口：BSRNN 单窗分离（注入缓存的注册嵌入），计时供 metrics
                 start = time.perf_counter()
-                seg = self._engine.extract_float(window, self._cached_spk_embedding) * self._synth_win
+                seg = self._combine(window, self._engine.extract_float(window, self._cached_spk_embedding))
                 self.last_extract_ms = (time.perf_counter() - start) * 1000.0
             self._ola_add(seg)                                    # 累加进重叠缓冲
             outputs.append(self._to_pcm16(self._ola_take(self._hop_samples)))  # 出队一块
@@ -386,7 +405,7 @@ class BufferedWeSepTse:
             window = np.zeros(self._window_samples, dtype=np.float32)
             window[:n] = self._in_buf[:n]
             start = time.perf_counter()
-            seg = self._engine.extract_float(window, self._cached_spk_embedding) * self._synth_win
+            seg = self._combine(window, self._engine.extract_float(window, self._cached_spk_embedding))
             self._ola_add(seg)
             self.last_extract_ms = (time.perf_counter() - start) * 1000.0
             # 真实音频占据 out_overlap[0:max(cf, n)]；其后为补零部分
