@@ -275,7 +275,9 @@ def extract_target_stream(mix_pcm: bytes, enroll_pcm: bytes,
     return s
 
 
-def gain_aligned_subtract(mix: np.ndarray, s: np.ndarray
+def gain_aligned_subtract(mix: np.ndarray, s: np.ndarray,
+                          rms_rel_gate: float = RMS_REL_GATE,
+                          gamma_cap: float = GAMMA_CAP
                           ) -> tuple[np.ndarray, np.ndarray, dict]:
     """带符号增益对齐相减：r = y − γ(t)·ŝ。返回 (残差, 逐采样 γ, 门控统计)。
 
@@ -286,7 +288,7 @@ def gain_aligned_subtract(mix: np.ndarray, s: np.ndarray
     for i in range(0, n, w):
         ss = s[i:i + w]
         block_rms.append(float(np.sqrt(np.mean(ss * ss) + 1e-15)))
-    rms_floor = RMS_REL_GATE * float(np.percentile(block_rms, 95))
+    rms_floor = rms_rel_gate * float(np.percentile(block_rms, 95))
 
     centers: list[float] = []
     gammas: list[float] = []
@@ -307,7 +309,7 @@ def gain_aligned_subtract(mix: np.ndarray, s: np.ndarray
             stats["nc_failed"] += 1
             continue
         gamma = float(np.dot(ys, ss) / (np.dot(ss, ss) + 1e-12))
-        if abs(gamma) > GAMMA_CAP:
+        if abs(gamma) > gamma_cap:
             gammas.append(0.0)                    # 除以小范数导致发散
             stats["gamma_failed"] += 1
             continue
@@ -424,6 +426,14 @@ def main() -> None:
                         help="另存目标估计（audios/output-target.wav，对照试听用）")
     parser.add_argument("--wiener-beta", type=float, default=WIENER_BETA,
                         help=f"维纳后滤波强度（默认 {WIENER_BETA}，0 = 关闭）")
+    parser.add_argument("--rms-gate", type=float, default=RMS_REL_GATE,
+                        help=f"能量门：ŝ 子窗 RMS 下限 = 此值 × p95（默认 {RMS_REL_GATE}；"
+                             "残留集中在部分段落时可调低（如 0.05），让 ŝ 较弱的段落也做相减，"
+                             "垃圾窗仍由相关门/增益帽兜底）")
+    parser.add_argument("--gamma-cap", type=float, default=GAMMA_CAP,
+                        help=f"增益帽：|γ| 上限（默认 {GAMMA_CAP}。ŝ 有效但幅度被模型压低的"
+                             "段落 γ 可达 20-60 且相关度高，此时可抬高（如 60）；"
+                             "γ 数百通常是除法发散，不要放开）")
     args = parser.parse_args(argv)
 
     device_spec = args.device or trailing_device or "cpu"
@@ -457,7 +467,8 @@ def main() -> None:
 
         print("带符号增益对齐相减…")
         with stage("增益对齐相减"):
-            residual, gamma_t, stats = gain_aligned_subtract(mix, s)
+            residual, gamma_t, stats = gain_aligned_subtract(mix, s, args.rms_gate,
+                                                             args.gamma_cap)
         s_aligned = gamma_t * s
 
         out = residual
