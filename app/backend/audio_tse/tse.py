@@ -84,7 +84,11 @@ class WeSepTseEngine:
     BufferedWeSepTse 每次提取新建。
     """
 
-    def __init__(self, model: TseModel) -> None:
+    def __init__(self, model: TseModel,
+                 window_seconds: float = WINDOW_SECONDS,
+                 crossfade_seconds: float = CROSSFADE_SECONDS,
+                 device: str = "cpu",
+                 threads: int | None = None) -> None:
         if not model.available:
             raise RuntimeError(model.unavailable_reason or "WeSep TSE 不可用")
 
@@ -97,9 +101,13 @@ class WeSepTseEngine:
         from wesep import load_model_local
 
         self._torch = torch
-        self._torch.set_num_threads(os.cpu_count() or 4)  # CPU 推理吃满所有核
+        # CPU 推理默认吃满所有核；threads 供离线脚本做线程数/功耗实验时注入
+        self._torch.set_num_threads(threads if threads else (os.cpu_count() or 4))
+        if str(device).startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError(
+                f"请求设备 {device}，但当前 torch {torch.__version__} 无 CUDA 支持")
         self._extractor = load_model_local(str(model.directory))  # 加载 config+权重（约 5 s）
-        self._extractor.set_device("cpu")          # 纯 CPU 部署
+        self._extractor.set_device(device)         # 默认纯 CPU；离线脚本可传 cuda 加速前向
         self._extractor.set_resample_rate(SAMPLE_RATE)  # 输入统一重采样到 16 k
         self._extractor.set_vad(False)             # 关掉内置 VAD：静音门控由外层自己做
         # OLA 要求各窗口振幅保持一致；逐窗口归一化会使每个窗口的增益在
@@ -107,10 +115,15 @@ class WeSepTseEngine:
         self._extractor.set_output_norm(False)
         self._device = self._extractor.device
 
-        # 由秒数换算出采样点数级别的常量，避免热路径上反复换算
-        self._window_samples = int(SAMPLE_RATE * WINDOW_SECONDS)    # 一个窗口的采样数（16000）
-        self._cf_samples = max(1, int(SAMPLE_RATE * CROSSFADE_SECONDS))  # 交叉淡入淡出的采样数（1600）
-        self._hop_samples = self._window_samples - self._cf_samples  # 每窗前进的步长（14400）
+        # 由秒数换算出采样点数级别的常量，避免热路径上反复换算。
+        # 窗长可注入：实时链路保持 1 s（低延迟）；离线处理（scripts/suppress-target.py）
+        # 传更长的窗（如 4 s）——BSRNN 的逐窗带内 BatchNorm 在长窗下统计更稳，
+        # 单窗估计质量显著更好（见 tse.py 头部对 1 s 窗 SI-SDR 损失的说明）。
+        self._window_samples = int(SAMPLE_RATE * window_seconds)    # 一个窗口的采样数
+        self._cf_samples = max(1, int(SAMPLE_RATE * crossfade_seconds))  # 交叉淡入淡出的采样数
+        if self._cf_samples >= self._window_samples:
+            raise ValueError("crossfade_seconds 必须小于 window_seconds")
+        self._hop_samples = self._window_samples - self._cf_samples  # 每窗前进的步长
         # 线性斜坡分析/合成窗：在重叠区 ramp_up + ramp_down == 1，
         # 从而重叠相加可重构为单位增益。
         ramp = np.linspace(0.0, 1.0, self._cf_samples, endpoint=False, dtype=np.float32)
@@ -132,7 +145,9 @@ class WeSepTseEngine:
         加载好，这里只剩一次 ECAPA 前向（很快）。"""
         torch = self._torch
         model = self._extractor.model            # 底层 nn.Module（BSRNN+ECAPA）
-        enroll = self._to_tensor(enrollment_pcm16).to(self._device)
+        # fbank（torchaudio kaldi 变换）不保证支持 CUDA 张量：注册音频很短，
+        # 特征在 CPU 上算再搬到目标设备，开销可忽略
+        enroll = self._to_tensor(enrollment_pcm16)
         # 提 fbank 特征并做 CMN（倒谱均值归一化），与训练时的输入一致
         feats = self._extractor.compute_fbank(enroll, sample_rate=SAMPLE_RATE, cmn=True)
         feats = feats.unsqueeze(0).to(self._device)  # [1, 1, T, F]：补 batch 维
@@ -172,8 +187,9 @@ class WeSepTseEngine:
             subband_feature.append(bn_func(subband_spec[i].view(batch_size * nch, bw * 2, -1)))
         subband_feature = torch.stack(subband_feature, 1)  # [B, 带数, 带宽*2, T']
         # 4) 分离网络：序列/双路径模块 + 注意力，用注册嵌入作条件，输出各带特征
+        # （nch 张量跟随输入设备，避免 GPU 路径上 CPU 标量张量与 CUDA 张量混算）
         sep_output = model.separator(subband_feature, spk_embedding,
-                                     torch.tensor(nch))
+                                     torch.tensor(nch, device=wav_input.device))
         sep_subband_spec = []
         # 5) 逐带生成幅度/相位类掩码并作用到复数谱上（复数比值掩码 CRM）
         for i, mask_func in enumerate(model.mask):

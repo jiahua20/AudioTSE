@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="980" font-family="Microsoft YaHei">
+  <!-- 列标题 -->
+  <rect x="40" y="20" width="260" height="32" rx="16" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.4"/>
+  <text x="170" y="42" font-size="15" font-weight="700" fill="#B7791F" text-anchor="middle">注册支路（一次性）</text>
+  <rect x="480" y="20" width="280" height="32" rx="16" fill="#EBF4FF" stroke="#2B6CB0" stroke-width="1.4"/>
+  <text x="620" y="42" font-size="15" font-weight="700" fill="#2B6CB0" text-anchor="middle">监听支路（持续运行）</text>
+
+  <!-- 左列：注册（中心 x=170） -->
+  <rect x="40" y="72" width="260" height="52" rx="10" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="170" y="103" font-size="13.5" fill="#1F2933" text-anchor="middle">注册语音（目标人，≥ 3 s）</text>
+  <rect x="40" y="156" width="260" height="76" rx="10" fill="#FFFFFF" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="170" y="182" font-size="12.5" fill="#1F2933" text-anchor="middle">Fbank 特征 + 均值归一化</text>
+  <text x="170" y="206" font-size="12.5" fill="#1F2933" text-anchor="middle">→ ECAPA-TDNN 嵌入 r（192 维）</text>
+  <rect x="40" y="260" width="260" height="64" rx="10" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="170" y="284" font-size="12.5" fill="#1F2933" text-anchor="middle">嵌入缓存：只算一次</text>
+  <text x="170" y="306" font-size="12.5" fill="#4A5568" text-anchor="middle">换人仅重算嵌入（约 0.06 s）</text>
+
+  <!-- 右列：监听（中心 x=620） -->
+  <rect x="480" y="72" width="280" height="52" rx="10" fill="#EBF4FF" stroke="#2B6CB0" stroke-width="1.6"/>
+  <text x="620" y="103" font-size="13.5" fill="#1F2933" text-anchor="middle">麦克风音频流（16 kHz，128 ms 帧）</text>
+  <rect x="480" y="156" width="280" height="64" rx="10" fill="#FFFFFF" stroke="#2B6CB0" stroke-width="1.6"/>
+  <text x="620" y="182" font-size="12.5" fill="#1F2933" text-anchor="middle">输入缓冲：音频帧 + VAD 语音标志</text>
+  <text x="620" y="206" font-size="12.5" fill="#1F2933" text-anchor="middle">逐采样对齐入队</text>
+
+  <!-- 判定菱形（中心 x=460） -->
+  <polygon points="460,248 575,290 460,332 345,290" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="460" y="295" font-size="13" fill="#1F2933" text-anchor="middle">攒满 1 秒窗口？</text>
+  <polygon points="460,368 575,410 460,452 345,410" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="460" y="415" font-size="12.5" fill="#1F2933" text-anchor="middle">语音占比 ≥ 0.05？</text>
+
+  <!-- 双分支：分离（左）与静音旁路（右） -->
+  <rect x="200" y="500" width="260" height="76" rx="10" fill="#FFFFFF" stroke="#2B6CB0" stroke-width="1.6"/>
+  <text x="330" y="524" font-size="13" fill="#1F2933" text-anchor="middle">单窗分离前向（六步，图 2）</text>
+  <text x="330" y="546" font-size="12.5" fill="#4A5568" text-anchor="middle">以缓存嵌入 r 为条件</text>
+  <rect x="480" y="500" width="260" height="64" rx="10" fill="#FFFFFF" stroke="#B7791F" stroke-width="1.6"/>
+  <text x="610" y="524" font-size="13" fill="#1F2933" text-anchor="middle">静音窗旁路：原声 × 合成窗</text>
+  <text x="610" y="546" font-size="11.5" fill="#718096" text-anchor="middle">完全跳过分离推理（约零算力）</text>
+
+  <!-- 重叠相加与输出 -->
+  <rect x="200" y="628" width="540" height="76" rx="10" fill="#FFFFFF" stroke="#4A5568" stroke-width="1.6"/>
+  <text x="470" y="652" font-size="13" fill="#1F2933" text-anchor="middle">乘梯形合成窗 → 重叠相加缓冲</text>
+  <text x="470" y="674" font-size="12.5" fill="#4A5568" text-anchor="middle">重叠区两窗权互补、总和恒为 1 —— 无缝拼接（图 3）</text>
+  <rect x="200" y="742" width="540" height="64" rx="10" fill="#E9F7EE" stroke="#2F855A" stroke-width="1.6"/>
+  <text x="470" y="766" font-size="13" fill="#1F2933" text-anchor="middle">每个步长出队 0.9 s：目标人语音</text>
+  <text x="470" y="786" font-size="12.5" fill="#4A5568" text-anchor="middle">→ 流式识别、出字幕 / 回放</text>
+
+  <!-- 运行保障（虚线框） -->
+  <rect x="140" y="856" width="280" height="104" rx="10" fill="#FFF5F5" stroke="#C53030" stroke-width="1.4" stroke-dasharray="6,5"/>
+  <text x="280" y="880" font-size="12.5" fill="#C53030" text-anchor="middle">积压保护（异常负载兜底）</text>
+  <text x="280" y="902" font-size="12" fill="#1F2933" text-anchor="middle">缓冲 &gt; 1 窗 + 0.5 s 容忍量</text>
+  <text x="280" y="922" font-size="12" fill="#1F2933" text-anchor="middle">丢最旧、保最新，丢弃量上报</text>
+  <text x="280" y="942" font-size="12" fill="#C53030" text-anchor="middle">端到端延迟有界（约 2.4 s）</text>
+  <rect x="440" y="856" width="280" height="104" rx="10" fill="#FFF8E7" stroke="#B7791F" stroke-width="1.4" stroke-dasharray="6,5"/>
+  <text x="580" y="880" font-size="12.5" fill="#B7791F" text-anchor="middle">尾部冲刷（停止时）</text>
+  <text x="580" y="902" font-size="12" fill="#1F2933" text-anchor="middle">残窗 ≥ 0.6 s：补零到整窗分离一次</text>
+  <text x="580" y="922" font-size="12" fill="#1F2933" text-anchor="middle">只输出真实音频段</text>
+  <text x="580" y="942" font-size="11.5" fill="#718096" text-anchor="middle">（末尾的字不丢、不掺伪影）</text>
+
+  <!-- 左列箭头 -->
+  <line x1="170" y1="124" x2="170" y2="152" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="163,141 177,141 170,152" fill="#94A3B8"/>
+  <line x1="170" y1="232" x2="170" y2="256" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="163,245 177,245 170,256" fill="#94A3B8"/>
+
+  <!-- 右列箭头 -->
+  <line x1="620" y1="124" x2="620" y2="152" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="613,141 627,141 620,152" fill="#94A3B8"/>
+
+  <!-- 输入缓冲 → 攒窗判定 -->
+  <polyline points="620,220 620,236 460,236 460,244" fill="none" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="453,235 467,235 460,244" fill="#94A3B8"/>
+
+  <!-- 攒窗：否 → 回流继续等帧（虚线） -->
+  <polyline points="345,290 326,290 326,204 476,204" fill="none" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="6,5"/>
+  <polygon points="466,199 466,209 476,204" fill="#94A3B8"/>
+  <text x="400" y="196" font-size="11" fill="#718096" text-anchor="middle" data-halo="1">否：继续等帧</text>
+
+  <!-- 攒窗：是 ↓ -->
+  <line x1="460" y1="332" x2="460" y2="364" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="453,353 467,353 460,364" fill="#94A3B8"/>
+  <text x="472" y="352" font-size="11.5" fill="#2F855A" text-anchor="start" data-halo="1">是</text>
+
+  <!-- 语音占比：静音 → 旁路（琥珀） -->
+  <polyline points="575,410 610,410 610,496" fill="none" stroke="#B7791F" stroke-width="1.6"/>
+  <polygon points="603,486 617,486 610,496" fill="#B7791F"/>
+  <text x="592" y="400" font-size="11.5" fill="#B7791F" text-anchor="middle" data-halo="1">静音</text>
+
+  <!-- 语音占比：语音 → 分离（绿） -->
+  <polyline points="460,452 460,478 330,478 330,496" fill="none" stroke="#2F855A" stroke-width="1.6"/>
+  <polygon points="323,486 337,486 330,496" fill="#2F855A"/>
+  <text x="395" y="470" font-size="11.5" fill="#2F855A" text-anchor="middle" data-halo="1">语音</text>
+
+  <!-- 缓存嵌入 r：条件注入分离器（虚线绿） -->
+  <polyline points="300,292 314,292 314,496" fill="none" stroke="#2F855A" stroke-width="1.6" stroke-dasharray="6,5"/>
+  <polygon points="308,486 320,486 314,496" fill="#2F855A"/>
+  <text x="306" y="392" font-size="11" fill="#2F855A" text-anchor="end" data-halo="1">缓存嵌入 r</text>
+  <text x="306" y="408" font-size="11" fill="#2F855A" text-anchor="end" data-halo="1">条件注入</text>
+
+  <!-- 双分支 → 重叠相加 -->
+  <line x1="330" y1="576" x2="330" y2="624" stroke="#2F855A" stroke-width="1.6"/>
+  <polygon points="323,614 337,614 330,624" fill="#2F855A"/>
+  <line x1="610" y1="564" x2="610" y2="624" stroke="#B7791F" stroke-width="1.6"/>
+  <polygon points="603,614 617,614 610,624" fill="#B7791F"/>
+
+  <!-- 重叠相加 → 输出 -->
+  <line x1="470" y1="704" x2="470" y2="738" stroke="#94A3B8" stroke-width="1.6"/>
+  <polygon points="463,728 477,728 470,738" fill="#94A3B8"/>
+
+  <!-- 输出 → 两个保障机制（虚线） -->
+  <line x1="280" y1="806" x2="280" y2="852" stroke="#C53030" stroke-width="1.4" stroke-dasharray="5,4"/>
+  <polygon points="273,842 287,842 280,852" fill="#C53030"/>
+  <line x1="580" y1="806" x2="580" y2="852" stroke="#B7791F" stroke-width="1.4" stroke-dasharray="5,4"/>
+  <polygon points="573,842 587,842 580,852" fill="#B7791F"/>
+</svg>
