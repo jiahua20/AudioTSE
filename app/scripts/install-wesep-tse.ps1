@@ -19,10 +19,12 @@ Write-Host '[1/3] Installing CPU PyTorch...'
 & $python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 if ($LASTEXITCODE -ne 0) { throw 'CPU PyTorch installation failed.' }
 
-# wesep 从 GitHub master 装；wespeaker 用 --no-deps 装（其重依赖本项目用不到，
+# wesep 固定装 wesep_2024 分支：2026-09 起 master 已重写为 v0.1（多线索训练框架），
+# 尚无本地推理 CLI 与预训练模型，且 load_model_local 接口已变，装 master 会破坏本链路；
+# wespeaker 用 --no-deps 装（其重依赖本项目用不到，
 # 运行时的导入问题由 backend/audio_tse/wesep_loader.py 的垫片解决）
 Write-Host '[2/3] Installing WeSep runtime...'
-& $python -m pip install PyYAML requests soundfile silero-vad 'git+https://github.com/wenet-e2e/wesep.git'
+& $python -m pip install PyYAML requests soundfile silero-vad 'git+https://github.com/wenet-e2e/wesep.git@wesep_2024'
 if ($LASTEXITCODE -ne 0) { throw 'WeSep installation failed.' }
 & $python -m pip install --no-deps 'https://github.com/wenet-e2e/wespeaker/archive/refs/heads/master.zip'
 if ($LASTEXITCODE -ne 0) { throw 'WeSpeaker model definitions installation failed.' }
